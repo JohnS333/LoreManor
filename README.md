@@ -1,5 +1,7 @@
-This is a software to events from Discord, In-game and livestreams and convert them into ordered dated descriptioned events with an intuitive UI
+This is a extract software to events from Discord, In-game and livestreams and convert them into ordered dated descriptioned events with an intuitive UI
 
+It is a System that Automatically Extract clippable moments from livestreams , and save them as events that happened with the mp4 for each clip
+Ideally keeping everything in chronological order to make it VERY EASY to allocate these into storyline videos
 
 
 

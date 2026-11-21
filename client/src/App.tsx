@@ -1,11 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
+import { getApiHealth } from './services/api'
 import './App.css'
 
 function App() {
   const [count, setCount] = useState(0)
+  const [apiStatus, setApiStatus] = useState('Checking API...')
+
+  useEffect(() => {
+    getApiHealth()
+      .then((health) => setApiStatus(`${health.service}: ${health.status}`))
+      .catch((error: unknown) => {
+        setApiStatus(error instanceof Error ? error.message : 'API unavailable')
+      })
+  }, [])
 
   return (
     <>
@@ -28,6 +38,7 @@ function App() {
         >
           Count is {count}
         </button>
+        <p>{apiStatus}</p>
       </section>
 
       <div className="ticks"></div>

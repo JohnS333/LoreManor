@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><circle cx="256" cy="202" r="143" fill="#EFC28B"/><path d="M136 185 Q166 135 206 155 Q243 105 296 141 Q335 124 365 157 L390 232 L115 232Z" fill="#F7D6A6" opacity=".42"/>
+<!-- cliff silhouette -->
+<path d="M40 405 L77 388 L99 347 L133 343 L152 306 L190 292 L225 310 L280 280 L329 305 L375 300 L403 337 L438 350 L463 386 L490 405Z" fill="#29252A" stroke="#C89865" stroke-width="5" stroke-linejoin="round"/>
+<path d="M60 405 L132 360 L170 353 L204 329 L251 350 L286 320 L332 339 L370 324 L412 366 L467 405Z" fill="#15171F"/>
+<path d="M155 380 L205 345 L246 358 L208 389 L177 398Z" fill="#D6A36C"/><path d="M295 342 L335 353 L360 382 L327 372Z" fill="#A57850"/>
+<!-- manor -->
+<path d="M150 324 L150 255 L193 215 L240 257 L240 327Z" fill="#15171F" stroke="#D8A872" stroke-width="5"/><path d="M139 260 L193 205 L249 261" fill="none" stroke="#E4B47C" stroke-width="8" stroke-linejoin="round"/>
+<path d="M292 327 L292 249 L353 218 L408 272 L408 344Z" fill="#17181F"/><path d="M285 255 L350 209 L414 270" fill="none" stroke="#B9895E" stroke-width="7"/>
+<!-- tower -->
+<path d="M243 335 L260 159 L329 159 L345 334 L316 316 L284 327Z" fill="#17181F" stroke="#D3A06B" stroke-width="5"/><path d="M258 170 L335 170 L335 188 L257 188Z" fill="#27242A" stroke="#D4A16D" stroke-width="4"/>
+<path d="M266 151 L276 107 L313 91 L337 150Z" fill="#17181F" stroke="#D6A36C" stroke-width="6" stroke-linejoin="round"/><path d="M270 119 L325 119 L325 163 L270 163Z" fill="#15171F" stroke="#D8AA73" stroke-width="5"/>
+<path d="M279 127 H290 V160 H279Z M299 127 H310 V160 H299Z M317 127 H324 V160 H317Z" fill="#F8C77E"/>
+<!-- flag -->
+<path d="M297 93 V44" stroke="#F4D0A0" stroke-width="5" stroke-linecap="round"/><path d="M299 47 Q324 36 345 50 Q365 55 382 47 L370 64 Q349 57 330 65 L299 62Z" fill="#F4C994"/>
+<!-- windows -->
+<path d="M171 275 Q185 259 200 275 V314 H171Z M361 280 Q375 263 390 280 V319 H361Z" fill="#F2B96F"/><path d="M185 267 V316 M171 291 H200 M375 271 V320 M361 295 H390" stroke="#29252A" stroke-width="5"/>
+<path d="M187 239 H198 V251 H187Z M290 216 L296 205 L302 216 V258 H290Z" fill="#F2B96F"/>
+<!-- cliff light edges -->
+<path d="M95 370 L131 352 L149 351 M209 344 L246 354 L277 330 M365 332 L402 362" fill="none" stroke="#D2A06D" stroke-width="6" stroke-linecap="round"/>
+<!-- waves -->
+<path d="M23 426 Q90 413 144 423 T252 418 Q293 403 334 414 T493 423 Q425 440 360 431 Q303 423 253 439 Q205 452 157 434 Q91 418 23 440Z" fill="#EFC28B"/><path d="M27 449 Q106 436 164 452 Q223 466 278 450 Q346 436 397 449 T492 445" fill="none" stroke="#323443" stroke-width="12" stroke-linecap="round"/>
+</svg>

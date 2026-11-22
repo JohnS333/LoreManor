@@ -31,8 +31,8 @@ function App() {
     <main className="workspace">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true">LM</div>
-          <span>LoreManor</span>
+          <img className="brand-mark" src="/src/assets/lore-manor-icon.svg" alt="" />
+          <span>Lore Manor</span>
         </div>
         <div className="topbar-actions">
           <button className="secondary-button" type="button">

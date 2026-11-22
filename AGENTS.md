@@ -13,5 +13,6 @@ Treat README.md as the primary source of project context.
 - Follow established architectural patterns.
 - Reuse existing utilities before creating new ones.
 - Avoid introducing unnecessary dependencies.
+- Develop in a way that allows for optionality. Nothing is set in stone. A change or added feature shouldnt require a massive refactor.
 - Run basic and relevant tests after modifications.
 - Update README.md when architectural or functional changes occur.

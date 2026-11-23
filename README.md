@@ -109,6 +109,32 @@ requests to Express on port `3001`.
 - The initial frontend state is empty until channel information is fetched or
   persistence JSON files exist. The UI must not invent sample channels, VODs,
   events, or projects.
+- The Settings dialog stores the active project's absolute Windows directory in
+  browser local storage. The directory can be updated or cleared from the same dialog.
+- Domain data is persisted through `PUT /api/persistence/:collection`. Supported
+  collections map to `channels.json`, `vods.json`, `events.json`,
+  `allocation-tracks.json`, and `projects.json` in the active project directory.
+  The server validates each payload and replaces JSON files atomically.
+- Channels are loaded from `channels.json` when a project directory is selected.
+  Adding a channel saves the updated channel list through the persistence API;
+  the name is inferred from the URL when possible and may be overridden.
+
+
+
+# Persistence
+Recommended flow:
+
+The server loads JSON when the project directory is selected.
+The client holds the loaded data in React state.
+User actions update React state immediately.
+Completed actions trigger an API save:
+Add/remove a channel
+Reorder an event
+Assign an allocation
+Create/update a project
+Text editing saves on submit, blur, or with a short debounce.
+The server writes atomically using a temporary file followed by rename.
+
 
 ## Development
 

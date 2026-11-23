@@ -1,13 +1,152 @@
-import { useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { Channel, LoreEvent, Vod } from '../../shared/types/api'
+import { loadChannels, saveChannels } from './services/api'
 import './App.css'
 
+const PROJECT_DIRECTORY_STORAGE_KEY = 'loreManor.projectDirectory'
+
+const getStoredProjectDirectory = () => localStorage.getItem(PROJECT_DIRECTORY_STORAGE_KEY) ?? ''
+
+const isWindowsDirectory = (directory: string) =>
+  /^[a-zA-Z]:\\(?:[^<>:"/\\|?*]+\\?)*$/.test(directory) ||
+  /^\\\\[^<>:"/\\|?*]+\\[^<>:"/\\|?*]+(?:\\[^<>:"/\\|?*]+)*\\?$/.test(directory)
+
+const getChannelNameFromUrl = (channelURL: string) => {
+  try {
+    const url = new URL(channelURL)
+    const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent)
+    const handle = segments.find((segment) => segment.startsWith('@'))
+    if (handle) return handle
+
+    const channelTypeIndex = segments.findIndex((segment) => ['channel', 'c', 'user'].includes(segment.toLowerCase()))
+    if (channelTypeIndex >= 0 && segments[channelTypeIndex + 1]) return segments[channelTypeIndex + 1]
+
+    const routeSuffixes = new Set(['videos', 'streams', 'shorts', 'live', 'featured', 'playlists'])
+    return [...segments].reverse().find((segment) => !routeSuffixes.has(segment.toLowerCase())) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 function App() {
-  const [channels] = useState<Channel[]>([])
+  const [channels, setChannels] = useState<Channel[]>([])
   const [vods] = useState<Vod[]>([])
   const [events, setEvents] = useState<LoreEvent[]>([])
   const [splitAllocations, setSplitAllocations] = useState(true)
   const [draggedEventId, setDraggedEventId] = useState<string | null>(null)
+  const [projectDirectory, setProjectDirectory] = useState(getStoredProjectDirectory)
+  const [directoryDraft, setDirectoryDraft] = useState(projectDirectory)
+  const [directoryError, setDirectoryError] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [channelFormOpen, setChannelFormOpen] = useState(false)
+  const [channelUrlDraft, setChannelUrlDraft] = useState('')
+  const [channelNameDraft, setChannelNameDraft] = useState('')
+  const [channelError, setChannelError] = useState('')
+  const [loadedChannelsDirectory, setLoadedChannelsDirectory] = useState('')
+  const [channelsLoadError, setChannelsLoadError] = useState('')
+  const [channelSaving, setChannelSaving] = useState(false)
+  const channelsLoading = Boolean(projectDirectory) && loadedChannelsDirectory !== projectDirectory && !channelsLoadError
+
+  useEffect(() => {
+    if (!projectDirectory) return
+
+    let isCurrent = true
+    loadChannels(projectDirectory)
+      .then((storedChannels) => {
+        if (isCurrent) {
+          setChannels(storedChannels)
+          setLoadedChannelsDirectory(projectDirectory)
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) setChannelsLoadError(error instanceof Error ? error.message : 'Unable to load channels.')
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [projectDirectory])
+
+  const openSettings = () => {
+    setDirectoryDraft(projectDirectory)
+    setDirectoryError('')
+    setSettingsOpen(true)
+  }
+
+  const saveProjectDirectory = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const directory = directoryDraft.trim()
+
+    if (!isWindowsDirectory(directory)) {
+      setDirectoryError('Enter an absolute Windows path, such as C:\\LoreManor.')
+      return
+    }
+
+    localStorage.setItem(PROJECT_DIRECTORY_STORAGE_KEY, directory)
+    setChannels([])
+    setLoadedChannelsDirectory('')
+    setChannelsLoadError('')
+    setProjectDirectory(directory)
+    setSettingsOpen(false)
+  }
+
+  const clearProjectDirectory = () => {
+    localStorage.removeItem(PROJECT_DIRECTORY_STORAGE_KEY)
+    setProjectDirectory('')
+    setChannels([])
+    setLoadedChannelsDirectory('')
+    setChannelsLoadError('')
+    setDirectoryDraft('')
+    setDirectoryError('')
+  }
+
+  const addChannel = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setChannelError('')
+
+    if (!projectDirectory) {
+      setChannelError('Set the project directory in Settings before adding a channel.')
+      return
+    }
+
+    let normalizedUrl: URL
+    try {
+      normalizedUrl = new URL(channelUrlDraft.trim())
+    } catch {
+      setChannelError('Enter a valid channel URL.')
+      return
+    }
+    if (normalizedUrl.protocol !== 'https:' && normalizedUrl.protocol !== 'http:') {
+      setChannelError('Channel URLs must use HTTP or HTTPS.')
+      return
+    }
+
+    const channelURL = channelUrlDraft.trim()
+    if (channels.some((channel) => channel.channelURL === channelURL)) {
+      setChannelError('That channel URL has already been added.')
+      return
+    }
+
+    const channelName = channelNameDraft.trim() || getChannelNameFromUrl(channelURL)
+    if (!channelName) {
+      setChannelError('Enter a channel name, or use a URL with a recognizable name.')
+      return
+    }
+
+    const updatedChannels: Channel[] = [...channels, { channelURL, channelName }]
+    setChannelSaving(true)
+    try {
+      await saveChannels(projectDirectory, updatedChannels)
+      setChannels(updatedChannels)
+      setChannelUrlDraft('')
+      setChannelNameDraft('')
+      setChannelFormOpen(false)
+    } catch (error) {
+      setChannelError(error instanceof Error ? error.message : 'Unable to save the channel.')
+    } finally {
+      setChannelSaving(false)
+    }
+  }
 
   const reorderEvent = (targetEventId: string) => {
     if (!draggedEventId || draggedEventId === targetEventId) return
@@ -40,7 +179,7 @@ function App() {
             Projects
             <span className="count">0</span>
           </button>
-          <button className="icon-button" type="button" aria-label="Settings">⚙</button>
+          <button className="icon-button" type="button" aria-label="Settings" onClick={openSettings}>⚙</button>
         </div>
       </header>
 
@@ -53,16 +192,30 @@ function App() {
             </div>
             <span className="count">{channels.length}</span>
           </div>
-          <button className="add-button" type="button">
+          <button className="add-button" type="button" onClick={() => {
+            setChannelError('')
+            setChannelFormOpen(true)
+          }}>
             <span aria-hidden="true">+</span>
             Add channel
           </button>
-          <div className="track-scroll empty-scroll">
-            <div className="empty-state">
-              <div className="empty-icon channel-icon" aria-hidden="true">◉</div>
-              <h2>No channels</h2>
-              <p>Add a YouTube channel to start loading VODs.</p>
-            </div>
+          <div className={`track-scroll channel-scroll ${channels.length === 0 ? 'empty-scroll' : ''}`}>
+            {channelsLoading ? (
+              <div className="empty-state"><p>Loading channels…</p></div>
+            ) : channelsLoadError ? (
+              <div className="empty-state"><p className="field-error">{channelsLoadError}</p></div>
+            ) : channels.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon channel-icon" aria-hidden="true">◉</div>
+                <h2>No channels</h2>
+                <p>Add a YouTube channel to start loading VODs.</p>
+              </div>
+            ) : channels.map((channel) => (
+              <article className="channel-card" key={channel.channelURL}>
+                <strong>{channel.channelName}</strong>
+                <span>{channel.channelURL}</span>
+              </article>
+            ))}
           </div>
         </section>
 
@@ -175,6 +328,109 @@ function App() {
           </div>
         </section>
       </div>
+
+      {settingsOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+          <section
+            className="settings-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-heading"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="settings-header">
+              <div>
+                <p className="track-kicker">Configuration</p>
+                <h2 id="settings-heading">Settings</h2>
+              </div>
+              <button className="icon-button" type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>×</button>
+            </div>
+            <form className="settings-form" onSubmit={saveProjectDirectory}>
+              <label htmlFor="project-directory">Project directory</label>
+              <p className="field-description">The Windows folder containing this project's JSON, captions, and videos.</p>
+              <input
+                id="project-directory"
+                type="text"
+                value={directoryDraft}
+                onChange={(event) => {
+                  setDirectoryDraft(event.target.value)
+                  setDirectoryError('')
+                }}
+                placeholder="C:\\Users\\Name\\LoreManor"
+                autoComplete="off"
+                aria-describedby={directoryError ? 'directory-error' : undefined}
+                required
+              />
+              {directoryError && <p className="field-error" id="directory-error">{directoryError}</p>}
+              <div className="settings-actions">
+                <button className="clear-button" type="button" onClick={clearProjectDirectory} disabled={!projectDirectory}>Clear</button>
+                <button className="save-button" type="submit">Save directory</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {channelFormOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setChannelFormOpen(false)}>
+          <section
+            className="settings-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-channel-heading"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="settings-header">
+              <div>
+                <p className="track-kicker">Sources</p>
+                <h2 id="add-channel-heading">Add channel</h2>
+              </div>
+              <button className="icon-button" type="button" aria-label="Close add channel" onClick={() => setChannelFormOpen(false)}>×</button>
+            </div>
+            <form className="settings-form" onSubmit={addChannel}>
+              <label htmlFor="channel-url">YouTube channel URL</label>
+              <p className="field-description">The channel name is inferred from the URL when possible; you can override it below.</p>
+              <input
+                id="channel-url"
+                type="url"
+                value={channelUrlDraft}
+                onChange={(event) => {
+                  setChannelUrlDraft(event.target.value)
+                  setChannelError('')
+                }}
+                placeholder="https://www.youtube.com/@channel"
+                autoComplete="url"
+                required
+              />
+              <label className="channel-name-label" htmlFor="channel-name">Channel name <span>(optional)</span></label>
+              <input
+                id="channel-name"
+                type="text"
+                value={channelNameDraft}
+                onChange={(event) => setChannelNameDraft(event.target.value)}
+                placeholder={getChannelNameFromUrl(channelUrlDraft) || 'Inferred from channel URL'}
+                autoComplete="off"
+              />
+              {!projectDirectory && (
+                <p className="field-error">Set the project directory in Settings before saving a channel.</p>
+              )}
+              {channelError && <p className="field-error" role="alert">{channelError}</p>}
+              <div className="settings-actions">
+                <button className="clear-button" type="button" onClick={() => setChannelFormOpen(false)}>Cancel</button>
+                <button className="save-button" type="submit" disabled={channelSaving || channelsLoading || Boolean(channelsLoadError)}>
+                  {channelSaving ? 'Saving…' : 'Save channel'}
+                </button>
+              </div>
+              {!projectDirectory && (
+                <button className="settings-link-button" type="button" onClick={() => {
+                  setChannelFormOpen(false)
+                  openSettings()
+                }}>Open Settings</button>
+              )}
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   )
 }

@@ -39,3 +39,25 @@ export type VideoProject = {
   projectType: 'Storyline' | 'Devlog'
   eventIDs: string[]
 }
+
+export type PersistedData = {
+  channels: Channel[]
+  vods: Vod[]
+  events: LoreEvent[]
+  allocationTracks: AllocationTrack[]
+  projects: VideoProject[]
+}
+
+export type PersistenceCollection = keyof PersistedData
+
+export type SavePersistenceRequest<K extends PersistenceCollection = PersistenceCollection> = {
+  projectDirectory: string
+  data: PersistedData[K]
+}
+
+export type SavePersistenceResponse = {
+  collection: PersistenceCollection
+  fileName: string
+  itemCount: number
+  savedAt: string
+}

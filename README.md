@@ -22,7 +22,7 @@ flowchart LR
         fetchVods["Channel:<br/>Fetch Vods Button"]
         vods["Vods (frontend data model):<br/>videoID<br/>videoURL<br/>datetime<br/>vod title<br/>thumbnailURL"]
         extractEvents["Extract<br/>Events Button"]
-        events["Events (frontend data model):<br/>eventID<br/>sourceType (VOD, manual, Discord)<br/>VOD ID (same as videoID in URL)<br/>datetime<br/>starttime<br/>endtime<br/>Description of the event<br/>trackAllocations:[<Story, or Devlog>]""]
+        events["Events (frontend data model):<br/>eventID<br/>sourceType (VOD, manual, Discord)<br/>VOD ID (same as videoID in URL)<br/>datetime<br/>starttime<br/>endtime<br/>Description of the event<br/>trackAllocations: [Story or Devlog]"]
         downloadClip["Video ? directory location : <br/> Download clip button"]
 
         channelInput --- fetchVods

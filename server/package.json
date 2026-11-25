@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"import('node:fs/promises').then(async ({ copyFile, mkdir }) => { await mkdir('dist/server/src/prompts', { recursive: true }); await copyFile('src/prompts/transcriptToEvents.txt', 'dist/server/src/prompts/transcriptToEvents.txt') })\"",
     "start": "node dist/server/src/index.js"
   },
   "dependencies": {

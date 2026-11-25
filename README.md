@@ -102,6 +102,11 @@ requests to Express on port `3001`.
 - The Events track can split into allocation tracks. The current allocation
   names are **Story** and **Devlog**, and additional allocation track names may
   be added without changing the track structure.
+- Each VOD has an ID-based color shared by its card's left bar, its connector
+  lines, and the left bars of its event cards in all allocation tracks.
+  Connector lines are clipped to the vertical bounds of the event-card
+  scrolling area and fade out over 28 pixels at its top and bottom edges,
+  keeping headers and the space below the tracks clear.
 - An event may be allocated to both Story and Devlog and may reference one or
   more video projects through `projectAllocations`.
 - Video projects are an optional grouping layer. A project has a project type of
@@ -118,6 +123,23 @@ requests to Express on port `3001`.
 - Channels are loaded from `channels.json` when a project directory is selected.
   Adding a channel saves the updated channel list through the persistence API;
   the name is inferred from the URL when possible and may be overridden.
+- Use **Fetch VODs** on a channel to retrieve its YouTube streams with `yt-dlp`.
+  Full video metadata is fetched so livestream dates are included. New videos
+  are merged by video ID into the existing VOD collection and saved through the
+  persistence API to `vods.json`; existing VODs are loaded when the project
+  directory is selected. Server terminal logs show fetch stages and each VOD
+  whose metadata is retrieved. The server requires `yt-dlp` on `PATH`.
+- Configure a Gemini API key in **Settings** to enable **Extract events** on
+  each VOD. The server fetches English captions with `yt-dlp`, caches them as
+  `<videoID>.vtt` in the active project directory, and reuses a non-empty cached
+  transcript on later extractions. Gemini-generated events are validated,
+  normalized to the shared event schema, merged into `events.json`, and shown
+  in the Events track. The API key remains in browser local storage and is sent
+  to the server only with an extraction request; it is not written to project
+  files or server logs. Event extraction uses `gemini-3.5-flash-lite`, Google's
+  high-throughput Flash-Lite model, to keep transcript processing costs low
+  while retaining the structured-output capability required by the prompt. The
+  server build copies the extraction prompt alongside the compiled application.
 
 
 

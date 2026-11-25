@@ -46,11 +46,11 @@ const isLoreEvent = (value: unknown): value is LoreEvent =>
   typeof value.eventID === 'string' &&
   (value.sourceType === 'VOD' || value.sourceType === 'manual' || value.sourceType === 'Discord') &&
   (typeof value.vodId === 'string' || value.vodId === null) &&
-  typeof value.datetime === 'string' &&
+  (typeof value.datetime === 'string' || value.datetime === null) &&
   typeof value.starttime === 'string' &&
   typeof value.endtime === 'string' &&
   typeof value.description === 'string' &&
-  typeof value.shortsViable === 'boolean' &&
+  (typeof value.shortsViable === 'boolean' || value.shortsViable === null) &&
   isStringArray(value.allocatedTracks) &&
   isStringArray(value.projectAllocations)
 
@@ -75,7 +75,7 @@ const validators: { [K in PersistenceCollection]: (value: unknown) => value is P
 export const isPersistenceCollection = (value: string): value is PersistenceCollection =>
   Object.hasOwn(FILE_NAMES, value)
 
-const validateProjectDirectory = async (projectDirectory: unknown) => {
+export const validateProjectDirectory = async (projectDirectory: unknown) => {
   if (typeof projectDirectory !== 'string' || !path.win32.isAbsolute(projectDirectory)) {
     throw new PersistenceValidationError('projectDirectory must be an absolute Windows path.')
   }

@@ -24,11 +24,11 @@ export type LoreEvent = {
   eventID: string
   sourceType: EventSourceType
   vodId: string | null
-  datetime: string
+  datetime: string | null
   starttime: string
   endtime: string
   description: string
-  shortsViable: boolean
+  shortsViable: boolean | null
   allocatedTracks: AllocationTrack[]
   projectAllocations: string[]
 }
@@ -61,3 +61,11 @@ export type SavePersistenceResponse = {
   itemCount: number
   savedAt: string
 }
+
+export type FetchChannelVodsResponse = {
+  vods: Vod[]
+  addedCount: number
+  totalCount: number
+}
+
+export type FetchVodEventsResponse = LoreEvent[]

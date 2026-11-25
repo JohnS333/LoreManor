@@ -1,11 +1,25 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import type { Channel, LoreEvent, Vod } from '../../shared/types/api'
-import { loadChannels, saveChannels } from './services/api'
+import { fetchChannelVods, fetchVodEvents, loadChannels, loadEvents, loadVods, saveChannels } from './services/api'
 import './App.css'
 
 const PROJECT_DIRECTORY_STORAGE_KEY = 'loreManor.projectDirectory'
+const GEMINI_API_KEY_STORAGE_KEY = 'loreManor.geminiApiKey'
 
 const getStoredProjectDirectory = () => localStorage.getItem(PROJECT_DIRECTORY_STORAGE_KEY) ?? ''
+const getStoredGeminiApiKey = () => localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY) ?? ''
+
+const getVodColor = (videoID: string) => {
+  let hash = 0
+  for (const character of videoID) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0
+  return `hsl(${hash % 360} 65% 68%)`
+}
+
+const sortEventsNewestFirst = (events: LoreEvent[]) => [...events].sort((first, second) => {
+  if (first.datetime === null) return second.datetime === null ? 0 : 1
+  if (second.datetime === null) return -1
+  return Date.parse(second.datetime) - Date.parse(first.datetime)
+})
 
 const isWindowsDirectory = (directory: string) =>
   /^[a-zA-Z]:\\(?:[^<>:"/\\|?*]+\\?)*$/.test(directory) ||
@@ -30,12 +44,15 @@ const getChannelNameFromUrl = (channelURL: string) => {
 
 function App() {
   const [channels, setChannels] = useState<Channel[]>([])
-  const [vods] = useState<Vod[]>([])
+  const [vods, setVods] = useState<Vod[]>([])
   const [events, setEvents] = useState<LoreEvent[]>([])
   const [splitAllocations, setSplitAllocations] = useState(true)
   const [draggedEventId, setDraggedEventId] = useState<string | null>(null)
   const [projectDirectory, setProjectDirectory] = useState(getStoredProjectDirectory)
   const [directoryDraft, setDirectoryDraft] = useState(projectDirectory)
+  const [geminiApiKey, setGeminiApiKey] = useState(getStoredGeminiApiKey)
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState(geminiApiKey)
+  const [geminiApiKeyNotice, setGeminiApiKeyNotice] = useState('')
   const [directoryError, setDirectoryError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [channelFormOpen, setChannelFormOpen] = useState(false)
@@ -45,7 +62,83 @@ function App() {
   const [loadedChannelsDirectory, setLoadedChannelsDirectory] = useState('')
   const [channelsLoadError, setChannelsLoadError] = useState('')
   const [channelSaving, setChannelSaving] = useState(false)
+  const [fetchingChannelURL, setFetchingChannelURL] = useState<string | null>(null)
+  const [vodsFetchError, setVodsFetchError] = useState('')
+  const [vodsFetchNotice, setVodsFetchNotice] = useState('')
+  const [loadedVodsDirectory, setLoadedVodsDirectory] = useState('')
+  const [vodsLoadError, setVodsLoadError] = useState('')
+  const [loadedEventsDirectory, setLoadedEventsDirectory] = useState('')
+  const [eventsLoadError, setEventsLoadError] = useState('')
+  const [extractingVideoID, setExtractingVideoID] = useState<string | null>(null)
+  const [eventExtractionError, setEventExtractionError] = useState('')
+  const [eventExtractionNotice, setEventExtractionNotice] = useState('')
+  const tracksRef = useRef<HTMLDivElement>(null)
+  const vodCardRefs = useRef(new Map<string, HTMLElement>())
+  const eventCardRefs = useRef(new Map<string, HTMLElement>())
+  const [connectorPaths, setConnectorPaths] = useState<{ path: string; color: string }[]>([])
+  const [connectorSize, setConnectorSize] = useState({ width: 0, height: 0 })
+  const [connectorClipTop, setConnectorClipTop] = useState(0)
+  const [connectorClipBottom, setConnectorClipBottom] = useState(0)
   const channelsLoading = Boolean(projectDirectory) && loadedChannelsDirectory !== projectDirectory && !channelsLoadError
+  const vodsLoading = Boolean(projectDirectory) && loadedVodsDirectory !== projectDirectory && !vodsLoadError
+  const eventsLoading = Boolean(projectDirectory) && loadedEventsDirectory !== projectDirectory && !eventsLoadError
+
+  useLayoutEffect(() => {
+    const tracks = tracksRef.current
+    if (!tracks) return
+
+    let frame: number | null = null
+    const updateConnectors = () => {
+      frame = null
+      const tracksRect = tracks.getBoundingClientRect()
+      setConnectorSize({ width: tracks.clientWidth, height: tracks.clientHeight })
+      const eventScroll = tracks.querySelector('.all-events .event-scroll')
+      if (eventScroll) {
+        const eventScrollRect = eventScroll.getBoundingClientRect()
+        setConnectorClipTop(Math.max(0, eventScrollRect.top - tracksRect.top))
+        setConnectorClipBottom(Math.max(0, tracksRect.bottom - eventScrollRect.bottom))
+      }
+      const paths = events.flatMap((event) => {
+        if (event.sourceType !== 'VOD' || !event.vodId) return []
+        const vodCard = vodCardRefs.current.get(event.vodId)
+        if (!vodCard) return []
+        const color = getVodColor(event.vodId)
+
+        const vodRect = vodCard.getBoundingClientRect()
+        const startX = vodRect.right - tracksRect.left
+        const startY = vodRect.top + vodRect.height / 2 - tracksRect.top
+        return [...eventCardRefs.current.entries()]
+          .filter(([key]) => key.startsWith(`${event.eventID}:`))
+          .map(([, eventCard]) => {
+            const eventRect = eventCard.getBoundingClientRect()
+            const endX = eventRect.left - tracksRect.left
+            const endY = eventRect.top + eventRect.height / 2 - tracksRect.top
+            const curve = Math.max(28, (endX - startX) * 0.45)
+            return {
+              path: `M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
+              color,
+            }
+          })
+      })
+      setConnectorPaths(paths)
+    }
+    const scheduleUpdate = () => {
+      if (frame === null) frame = window.requestAnimationFrame(updateConnectors)
+    }
+    const scrollElements = tracks.querySelectorAll('.track-scroll')
+    scrollElements.forEach((element) => element.addEventListener('scroll', scheduleUpdate, { passive: true }))
+    window.addEventListener('resize', scheduleUpdate)
+    const resizeObserver = new ResizeObserver(scheduleUpdate)
+    resizeObserver.observe(tracks)
+    scheduleUpdate()
+
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      scrollElements.forEach((element) => element.removeEventListener('scroll', scheduleUpdate))
+      window.removeEventListener('resize', scheduleUpdate)
+      resizeObserver.disconnect()
+    }
+  }, [events, vods, splitAllocations, eventsLoading])
 
   useEffect(() => {
     if (!projectDirectory) return
@@ -67,9 +160,51 @@ function App() {
     }
   }, [projectDirectory])
 
+  useEffect(() => {
+    if (!projectDirectory) return
+
+    let isCurrent = true
+    loadVods(projectDirectory)
+      .then((storedVods) => {
+        if (isCurrent) {
+          setVods(storedVods)
+          setLoadedVodsDirectory(projectDirectory)
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) setVodsLoadError(error instanceof Error ? error.message : 'Unable to load VODs.')
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [projectDirectory])
+
+  useEffect(() => {
+    if (!projectDirectory) return
+
+    let isCurrent = true
+    loadEvents(projectDirectory)
+      .then((storedEvents) => {
+        if (isCurrent) {
+          setEvents(sortEventsNewestFirst(storedEvents))
+          setLoadedEventsDirectory(projectDirectory)
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) setEventsLoadError(error instanceof Error ? error.message : 'Unable to load events.')
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [projectDirectory])
+
   const openSettings = () => {
     setDirectoryDraft(projectDirectory)
+    setGeminiApiKeyDraft(geminiApiKey)
     setDirectoryError('')
+    setGeminiApiKeyNotice('')
     setSettingsOpen(true)
   }
 
@@ -84,8 +219,18 @@ function App() {
 
     localStorage.setItem(PROJECT_DIRECTORY_STORAGE_KEY, directory)
     setChannels([])
+    setVods([])
+    setEvents([])
     setLoadedChannelsDirectory('')
+    setLoadedVodsDirectory('')
+    setLoadedEventsDirectory('')
     setChannelsLoadError('')
+    setVodsLoadError('')
+    setEventsLoadError('')
+    setVodsFetchError('')
+    setVodsFetchNotice('')
+    setEventExtractionError('')
+    setEventExtractionNotice('')
     setProjectDirectory(directory)
     setSettingsOpen(false)
   }
@@ -94,10 +239,43 @@ function App() {
     localStorage.removeItem(PROJECT_DIRECTORY_STORAGE_KEY)
     setProjectDirectory('')
     setChannels([])
+    setVods([])
+    setEvents([])
     setLoadedChannelsDirectory('')
+    setLoadedVodsDirectory('')
+    setLoadedEventsDirectory('')
     setChannelsLoadError('')
+    setVodsLoadError('')
+    setEventsLoadError('')
+    setVodsFetchError('')
+    setVodsFetchNotice('')
+    setEventExtractionError('')
+    setEventExtractionNotice('')
     setDirectoryDraft('')
     setDirectoryError('')
+  }
+
+  const saveGeminiApiKey = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const apiKey = geminiApiKeyDraft.trim()
+    if (apiKey) {
+      localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, apiKey)
+      setGeminiApiKey(apiKey)
+      setGeminiApiKeyDraft(apiKey)
+      setGeminiApiKeyNotice('Gemini API key saved in this browser.')
+      return
+    }
+
+    localStorage.removeItem(GEMINI_API_KEY_STORAGE_KEY)
+    setGeminiApiKey('')
+    setGeminiApiKeyNotice('Gemini API key removed from this browser.')
+  }
+
+  const clearGeminiApiKey = () => {
+    localStorage.removeItem(GEMINI_API_KEY_STORAGE_KEY)
+    setGeminiApiKey('')
+    setGeminiApiKeyDraft('')
+    setGeminiApiKeyNotice('Gemini API key removed from this browser.')
   }
 
   const addChannel = async (event: FormEvent<HTMLFormElement>) => {
@@ -148,6 +326,57 @@ function App() {
     }
   }
 
+  const fetchVodsForChannel = async (channel: Channel) => {
+    if (!projectDirectory || fetchingChannelURL) return
+    setFetchingChannelURL(channel.channelURL)
+    setVodsFetchError('')
+    setVodsFetchNotice('')
+
+    try {
+      const result = await fetchChannelVods(projectDirectory, channel.channelURL)
+      setVods(result.vods)
+      setVodsFetchNotice(
+        result.addedCount === 0
+          ? `No new VODs found for ${channel.channelName}.`
+          : `Added ${result.addedCount} VOD${result.addedCount === 1 ? '' : 's'} from ${channel.channelName}.`,
+      )
+    } catch (error) {
+      setVodsFetchError(error instanceof Error ? error.message : `Unable to fetch VODs from ${channel.channelName}.`)
+    } finally {
+      setFetchingChannelURL(null)
+    }
+  }
+
+  const extractEventsForVod = async (vod: Vod) => {
+    if (!projectDirectory || extractingVideoID) return
+    if (!geminiApiKey.trim()) {
+      setEventExtractionError('Add a Gemini API key in Settings before extracting events.')
+      openSettings()
+      return
+    }
+
+    setExtractingVideoID(vod.videoID)
+    setEventExtractionError('')
+    setEventExtractionNotice('')
+
+    try {
+      const result = await fetchVodEvents(projectDirectory, vod, geminiApiKey)
+      setEvents((currentEvents) => sortEventsNewestFirst([
+        ...currentEvents.filter((event) => !(event.sourceType === 'VOD' && event.vodId === vod.videoID)),
+        ...result.events,
+      ]))
+      setEventExtractionNotice(
+        result.transcriptReused
+          ? `Extracted ${result.events.length} event${result.events.length === 1 ? '' : 's'} from the cached transcript.`
+          : `Extracted ${result.events.length} event${result.events.length === 1 ? '' : 's'} and saved the transcript.`,
+      )
+    } catch (error) {
+      setEventExtractionError(error instanceof Error ? error.message : `Unable to extract events from ${vod.vodTitle}.`)
+    } finally {
+      setExtractingVideoID(null)
+    }
+  }
+
   const reorderEvent = (targetEventId: string) => {
     if (!draggedEventId || draggedEventId === targetEventId) return
 
@@ -164,6 +393,34 @@ function App() {
       reordered.splice(toIndex, 0, moved)
       return reordered
     })
+  }
+
+  const renderEventCard = (event: LoreEvent, isPrimary = false, trackName = 'all') => {
+    const vod = event.vodId ? vods.find((candidate) => candidate.videoID === event.vodId) : undefined
+    return (
+      <article
+        key={event.eventID}
+        ref={(element) => {
+          const cardKey = `${event.eventID}:${trackName}`
+          if (element) eventCardRefs.current.set(cardKey, element)
+          else eventCardRefs.current.delete(cardKey)
+        }}
+        className="event-card"
+        style={event.sourceType === 'VOD' && event.vodId
+          ? { borderLeft: `4px solid ${getVodColor(event.vodId)}` }
+          : undefined}
+        draggable={isPrimary && event.sourceType === 'manual'}
+        onDragStart={isPrimary ? () => setDraggedEventId(event.eventID) : undefined}
+        onDragEnd={isPrimary ? () => setDraggedEventId(null) : undefined}
+        onDragOver={isPrimary ? (dragEvent) => dragEvent.preventDefault() : undefined}
+        onDrop={isPrimary ? () => reorderEvent(event.eventID) : undefined}
+      >
+        {vod?.thumbnailURL && (
+          <img className="event-card-thumbnail" src={vod.thumbnailURL} alt="" loading="lazy" />
+        )}
+        <span>{event.description}</span>
+      </article>
+    )
   }
 
   return (
@@ -183,7 +440,19 @@ function App() {
         </div>
       </header>
 
-      <div className="tracks">
+      <div className="tracks" ref={tracksRef}>
+        <svg
+          className="connector-overlay"
+          style={{
+            clipPath: `inset(${connectorClipTop}px 0 ${connectorClipBottom}px 0)`,
+            maskImage: `linear-gradient(to bottom, transparent ${connectorClipTop}px, black ${connectorClipTop + 28}px, black calc(100% - ${connectorClipBottom + 28}px), transparent calc(100% - ${connectorClipBottom}px))`,
+          }}
+          aria-hidden="true"
+          viewBox={`0 0 ${connectorSize.width} ${connectorSize.height}`}
+          preserveAspectRatio="none"
+        >
+          {connectorPaths.map(({ path, color }, index) => <path key={`${path}-${index}`} d={path} stroke={color} />)}
+        </svg>
         <section className="track channels-track" aria-labelledby="channels-heading">
           <div className="track-header">
             <div>
@@ -214,6 +483,14 @@ function App() {
               <article className="channel-card" key={channel.channelURL}>
                 <strong>{channel.channelName}</strong>
                 <span>{channel.channelURL}</span>
+                <button
+                  className="channel-fetch-button"
+                  type="button"
+                  onClick={() => void fetchVodsForChannel(channel)}
+                  disabled={!projectDirectory || Boolean(fetchingChannelURL) || vodsLoading}
+                >
+                  {fetchingChannelURL === channel.channelURL ? 'Fetching…' : 'Fetch VODs'}
+                </button>
               </article>
             ))}
           </div>
@@ -227,17 +504,58 @@ function App() {
             </div>
             <div className="vod-actions">
               <span className="count">{vods.length}</span>
-              <button className="icon-button refresh-button" type="button" aria-label="Fetch VODs">↻</button>
             </div>
           </div>
-          <div className="track-scroll empty-scroll">
-            <div className="empty-state">
-              <div className="empty-icon" aria-hidden="true">
-                <span className="play-icon">▶</span>
+          <div className={`track-scroll vod-scroll ${vods.length === 0 && !vodsFetchError && !vodsFetchNotice ? 'empty-scroll' : ''}`}>
+            {vodsLoading ? (
+              <div className="empty-state"><p>Loading VODs…</p></div>
+            ) : vodsLoadError ? (
+              <div className="empty-state"><p className="field-error" role="alert">{vodsLoadError}</p></div>
+            ) : vods.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon" aria-hidden="true">
+                  <span className="play-icon">▶</span>
+                </div>
+                <h2>No VODs yet</h2>
+                <p>Add a channel, then fetch its available videos.</p>
               </div>
-              <h2>No VODs yet</h2>
-              <p>Add a channel, then fetch its available videos.</p>
-            </div>
+            ) : (
+              vods.map((vod) => (
+                <article
+                  className="vod-card"
+                  style={{ borderLeft: `4px solid ${getVodColor(vod.videoID)}` }}
+                  key={vod.videoID}
+                  ref={(element) => {
+                    if (element) vodCardRefs.current.set(vod.videoID, element)
+                    else vodCardRefs.current.delete(vod.videoID)
+                  }}
+                >
+                  {vod.thumbnailURL && <img src={vod.thumbnailURL} alt="" loading="lazy" />}
+                  <div className="vod-card-details">
+                    <a href={vod.videoURL} target="_blank" rel="noreferrer">{vod.vodTitle}</a>
+                    {vod.datetime && <time dateTime={vod.datetime}>{new Date(vod.datetime).toLocaleDateString()}</time>}
+                    <button
+                      className="channel-fetch-button event-extract-button"
+                      type="button"
+                      onClick={() => void extractEventsForVod(vod)}
+                      disabled={!projectDirectory || Boolean(extractingVideoID) || eventsLoading}
+                    >
+                      {extractingVideoID === vod.videoID ? 'Extracting…' : 'Extract events'}
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+            {(vodsFetchError || vodsFetchNotice) && (
+              <p className={vodsFetchError ? 'field-error vod-fetch-message' : 'vod-fetch-notice'} role={vodsFetchError ? 'alert' : 'status'}>
+                {vodsFetchError || vodsFetchNotice}
+              </p>
+            )}
+            {(eventExtractionError || eventExtractionNotice) && (
+              <p className={eventExtractionError ? 'field-error vod-fetch-message' : 'vod-fetch-notice'} role={eventExtractionError ? 'alert' : 'status'}>
+                {eventExtractionError || eventExtractionNotice}
+              </p>
+            )}
           </div>
         </section>
 
@@ -274,26 +592,18 @@ function App() {
                 className="track-scroll event-scroll"
                 onDragOver={(event) => event.preventDefault()}
               >
-                {events.length === 0 ? (
+                {eventsLoading ? (
+                  <div className="empty-state events-empty"><p>Loading events…</p></div>
+                ) : eventsLoadError ? (
+                  <div className="empty-state events-empty"><p className="field-error" role="alert">{eventsLoadError}</p></div>
+                ) : events.length === 0 ? (
                   <div className="empty-state events-empty">
                     <div className="empty-icon timeline-icon" aria-hidden="true">⋮</div>
                     <h2>No events</h2>
                     <p>Extracted moments and manually added events will appear here.</p>
                   </div>
                 ) : (
-                  events.map((event) => (
-                    <article
-                      key={event.eventID}
-                      className="event-card"
-                      draggable={event.sourceType === 'manual'}
-                      onDragStart={() => setDraggedEventId(event.eventID)}
-                      onDragEnd={() => setDraggedEventId(null)}
-                      onDragOver={(dragEvent) => dragEvent.preventDefault()}
-                      onDrop={() => reorderEvent(event.eventID)}
-                    >
-                      {event.description}
-                    </article>
-                  ))
+                  events.map((event) => renderEventCard(event, true))
                 )}
               </div>
             </div>
@@ -314,11 +624,7 @@ function App() {
                       ) : (
                         events
                           .filter((event) => event.allocatedTracks.includes(trackName))
-                          .map((event) => (
-                            <article key={event.eventID} className="event-card">
-                              {event.description}
-                            </article>
-                          ))
+                          .map((event) => renderEventCard(event, false, trackName))
                       )}
                     </div>
                   </div>
@@ -365,6 +671,29 @@ function App() {
               <div className="settings-actions">
                 <button className="clear-button" type="button" onClick={clearProjectDirectory} disabled={!projectDirectory}>Clear</button>
                 <button className="save-button" type="submit">Save directory</button>
+              </div>
+            </form>
+            <form className="settings-form settings-key-form" onSubmit={saveGeminiApiKey}>
+              <label htmlFor="gemini-api-key">Gemini API key</label>
+              <p className="field-description">
+                Stored in this browser only (not encrypted). Sent to the server for extraction; never saved with project files.
+              </p>
+              <input
+                id="gemini-api-key"
+                type="password"
+                value={geminiApiKeyDraft}
+                onChange={(event) => {
+                  setGeminiApiKeyDraft(event.target.value)
+                  setGeminiApiKeyNotice('')
+                }}
+                autoComplete="new-password"
+                spellCheck={false}
+                placeholder={geminiApiKey ? 'Saved API key' : 'Enter your Gemini API key'}
+              />
+              {geminiApiKeyNotice && <p className="field-description" role="status">{geminiApiKeyNotice}</p>}
+              <div className="settings-actions">
+                <button className="clear-button" type="button" onClick={clearGeminiApiKey} disabled={!geminiApiKey}>Remove key</button>
+                <button className="save-button" type="submit">Save key</button>
               </div>
             </form>
           </section>

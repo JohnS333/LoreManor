@@ -87,6 +87,7 @@ flowchart LR
 - `client/` contains the React 19 and Vite frontend.
 - `server/` contains the Node.js and Express API.
 - `shared/` contains types and contracts used by both applications.
+- `DESIGN_LANGUAGE.md` defines the "Manor Timber & Aged Brass" design system and CSS tokens implemented in `client/src/index.css` and `client/src/App.css`.
 
 The frontend and API are independent npm workspaces. The Vite development server proxies `/api`
 requests to Express on port `3001`.
@@ -99,9 +100,9 @@ requests to Express on port `3001`.
 - The Events track is ordered chronologically. Events derived from VODs cannot
   be manually reordered. Only events with `sourceType: "manual"` can be
   reordered with drag and drop.
-- The Events track can split into allocation tracks. The current allocation
-  names are **Story** and **Devlog**, and additional allocation track names may
-  be added without changing the track structure.
+- The Events track contains two side-by-side allocation lanes: **Devlog** on
+  the left and **Story** on the right. Events belong to at least one lane;
+  events with no Story or Devlog allocation default to Devlog.
 - Each VOD has an ID-based color shared by its card's left bar, its connector
   lines, and the left bars of its event cards in all allocation tracks.
   Connector lines are clipped to the vertical bounds of the event-card
@@ -109,6 +110,15 @@ requests to Express on port `3001`.
   keeping headers and the space below the tracks clear.
 - An event may be allocated to both Story and Devlog and may reference one or
   more video projects through `projectAllocations`.
+- Use **Edit** on an event card to save a new description or **Delete** to
+  remove the event after confirmation. Deleting does not remove the source VOD,
+  transcript, or clips. Re-extracting a VOD replaces its existing event set.
+- Event cards show the event date and local time, use the source VOD's
+  thumbnail as a background image fading out from left to right, and include a
+  YouTube button that opens the source video at the event's start timestamp.
+- In the allocation lanes, drag an event card's edge across the divider to
+  expand it into both lanes or shrink it back to one.
+  The card's Story/Devlog membership is saved in `allocatedTracks` in `events.json`.
 - Video projects are an optional grouping layer. A project has a project type of
   **Storyline** or **Devlog** and contains references to event IDs.
 - The initial frontend state is empty until channel information is fetched or

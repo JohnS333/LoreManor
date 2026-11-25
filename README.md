@@ -113,9 +113,10 @@ requests to Express on port `3001`.
 - Use **Edit** on an event card to save a new description or **Delete** to
   remove the event after confirmation. Deleting does not remove the source VOD,
   transcript, or clips. Re-extracting a VOD replaces its existing event set.
-- Event cards show the event date and local time, use the source VOD's
-  thumbnail as a background image fading out from left to right, and include a
-  YouTube button that opens the source video at the event's start timestamp.
+- Event cards show the event date, local time, and clip duration, use the
+  source VOD's thumbnail as a background image fading out from left to right,
+  and include a YouTube button that opens the source video at the event's start
+  timestamp.
 - In the allocation lanes, drag an event card's edge across the divider to
   expand it into both lanes or shrink it back to one.
   The card's Story/Devlog membership is saved in `allocatedTracks` in `events.json`.

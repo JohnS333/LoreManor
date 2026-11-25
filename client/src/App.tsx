@@ -38,19 +38,50 @@ const getVodColor = (videoID: string) => {
   return `hsl(${hash % 360} 65% 68%)`
 }
 
+const parseTimestampSeconds = (timestamp: string) => {
+  const hmsMatch = /^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d+))?$/.exec(timestamp.trim())
+  if (hmsMatch) {
+    const [, hours, minutes, seconds, fraction] = hmsMatch
+    return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds) + (fraction ? Number(`0.${fraction}`) : 0)
+  }
+
+  const msMatch = /^(\d+):([0-5]\d)(?:\.(\d+))?$/.exec(timestamp.trim())
+  if (msMatch) {
+    const [, minutes, seconds, fraction] = msMatch
+    return Number(minutes) * 60 + Number(seconds) + (fraction ? Number(`0.${fraction}`) : 0)
+  }
+
+  return null
+}
+
 const getTimestampedVideoUrl = (videoURL: string, timestamp: string) => {
-  const parts = /^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d+))?$/.exec(timestamp)
-  if (!parts) return videoURL
-  const [, hours, minutes, seconds] = parts
-  const offset = Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds)
+  const seconds = parseTimestampSeconds(timestamp)
+  if (seconds === null) return videoURL
 
   try {
     const url = new URL(videoURL)
-    url.searchParams.set('t', String(offset))
+    url.searchParams.set('t', String(Math.floor(seconds)))
     return url.toString()
   } catch {
     return videoURL
   }
+}
+
+const getEventDurationLabel = (event: LoreEvent) => {
+  const startSeconds = parseTimestampSeconds(event.starttime)
+  const endSeconds = parseTimestampSeconds(event.endtime)
+  if (startSeconds === null || endSeconds === null) return null
+
+  const totalSeconds = Math.round(endSeconds - startSeconds)
+  if (totalSeconds < 0) return null
+
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) return seconds > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${hours}h ${minutes}m`
+  if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+  return `${seconds}s`
 }
 
 const getEventDateTimeLabel = (event: LoreEvent) => {
@@ -537,6 +568,7 @@ function App() {
     const vod = event.vodId ? vods.find((candidate) => candidate.videoID === event.vodId) : undefined
     const span = getEventSpan(event)
     const displayedSpan = span
+    const durationLabel = getEventDurationLabel(event)
     return (
       <article
         ref={placeholder ? undefined : (element) => {
@@ -554,9 +586,16 @@ function App() {
         }}
       >
         <span>{event.description}</span>
-        <time className="event-card-datetime" dateTime={event.datetime ?? undefined}>
-          {getEventDateTimeLabel(event)}
-        </time>
+        <div className="event-card-meta">
+          <time className="event-card-datetime" dateTime={event.datetime ?? undefined}>
+            {getEventDateTimeLabel(event)}
+          </time>
+          {durationLabel && (
+            <span className="event-card-duration" title="Clip duration">
+              {durationLabel}
+            </span>
+          )}
+        </div>
         <div className="event-card-actions">
           {vod && (
             <a

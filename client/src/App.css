@@ -784,12 +784,29 @@ button:focus-visible {
 .span-story { grid-column: 2; }
 .span-both { grid-column: 1 / -1; }
 
-.event-card-datetime {
-  display: block;
+.event-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   margin-top: 5px;
+}
+
+.event-card-datetime {
   color: #d0c8bc;
   font-size: 10px;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.75);
+}
+
+.event-card-duration {
+  color: #e6dccb;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(18, 16, 14, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
 .event-card > span:not(.event-resize-handle),

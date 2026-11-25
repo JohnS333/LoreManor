@@ -1,18 +1,64 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import type { Channel, LoreEvent, Vod } from '../../shared/types/api'
-import { fetchChannelVods, fetchVodEvents, loadChannels, loadEvents, loadVods, saveChannels } from './services/api'
+import { fetchChannelVods, fetchVodEvents, loadChannels, loadEvents, loadVods, saveChannels, saveEvents } from './services/api'
 import './App.css'
 
 const PROJECT_DIRECTORY_STORAGE_KEY = 'loreManor.projectDirectory'
 const GEMINI_API_KEY_STORAGE_KEY = 'loreManor.geminiApiKey'
+const EVENT_LANES = ['Devlog', 'Story'] as const
+const EVENT_SPANS = {
+  story: ['Story'],
+  devlog: ['Devlog'],
+  both: EVENT_LANES,
+} as const
+
+type EventSpan = keyof typeof EVENT_SPANS
+type ResizeEdge = 'left' | 'right'
+
+const getEventSpan = (event: LoreEvent): EventSpan => {
+  const story = event.allocatedTracks.includes('Story')
+  const devlog = event.allocatedTracks.includes('Devlog')
+  return story ? (devlog ? 'both' : 'story') : 'devlog'
+}
+
+const ensureEventAllocation = (event: LoreEvent): LoreEvent => {
+  if (event.allocatedTracks.includes('Story') || event.allocatedTracks.includes('Devlog')) return event
+  return { ...event, allocatedTracks: [...event.allocatedTracks, 'Devlog'] }
+}
+
+const normalizeEventAllocations = (events: LoreEvent[]) => events.map(ensureEventAllocation)
 
 const getStoredProjectDirectory = () => localStorage.getItem(PROJECT_DIRECTORY_STORAGE_KEY) ?? ''
 const getStoredGeminiApiKey = () => localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY) ?? ''
+const getProjectName = (directory: string) => directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || directory
 
 const getVodColor = (videoID: string) => {
   let hash = 0
   for (const character of videoID) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0
   return `hsl(${hash % 360} 65% 68%)`
+}
+
+const getTimestampedVideoUrl = (videoURL: string, timestamp: string) => {
+  const parts = /^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d+))?$/.exec(timestamp)
+  if (!parts) return videoURL
+  const [, hours, minutes, seconds] = parts
+  const offset = Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds)
+
+  try {
+    const url = new URL(videoURL)
+    url.searchParams.set('t', String(offset))
+    return url.toString()
+  } catch {
+    return videoURL
+  }
+}
+
+const getEventDateTimeLabel = (event: LoreEvent) => {
+  if (event.datetime && Number.isFinite(Date.parse(event.datetime))) {
+    const date = new Date(event.datetime)
+    return `${date.toLocaleDateString()} · ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  }
+  return `Date unavailable · ${event.starttime || 'Time unavailable'}`
 }
 
 const sortEventsNewestFirst = (events: LoreEvent[]) => [...events].sort((first, second) => {
@@ -46,8 +92,6 @@ function App() {
   const [channels, setChannels] = useState<Channel[]>([])
   const [vods, setVods] = useState<Vod[]>([])
   const [events, setEvents] = useState<LoreEvent[]>([])
-  const [splitAllocations, setSplitAllocations] = useState(true)
-  const [draggedEventId, setDraggedEventId] = useState<string | null>(null)
   const [projectDirectory, setProjectDirectory] = useState(getStoredProjectDirectory)
   const [directoryDraft, setDirectoryDraft] = useState(projectDirectory)
   const [geminiApiKey, setGeminiApiKey] = useState(getStoredGeminiApiKey)
@@ -72,6 +116,13 @@ function App() {
   const [extractingVideoID, setExtractingVideoID] = useState<string | null>(null)
   const [eventExtractionError, setEventExtractionError] = useState('')
   const [eventExtractionNotice, setEventExtractionNotice] = useState('')
+  const [eventSaving, setEventSaving] = useState(false)
+  const [eventSaveError, setEventSaveError] = useState('')
+  const [eventDialog, setEventDialog] = useState<{ mode: 'edit' | 'delete'; eventID: string } | null>(null)
+  const eventDialogRef = useRef<HTMLDialogElement>(null)
+  const [descriptionDraft, setDescriptionDraft] = useState('')
+  const resizeStartX = useRef<number | null>(null)
+  const allocationGridRef = useRef<HTMLDivElement>(null)
   const tracksRef = useRef<HTMLDivElement>(null)
   const vodCardRefs = useRef(new Map<string, HTMLElement>())
   const eventCardRefs = useRef(new Map<string, HTMLElement>())
@@ -82,6 +133,8 @@ function App() {
   const channelsLoading = Boolean(projectDirectory) && loadedChannelsDirectory !== projectDirectory && !channelsLoadError
   const vodsLoading = Boolean(projectDirectory) && loadedVodsDirectory !== projectDirectory && !vodsLoadError
   const eventsLoading = Boolean(projectDirectory) && loadedEventsDirectory !== projectDirectory && !eventsLoadError
+  const eventWriteInProgress = eventSaving || Boolean(extractingVideoID)
+  const eventWritesDisabled = eventWriteInProgress || eventsLoading || Boolean(eventsLoadError) || !projectDirectory
 
   useLayoutEffect(() => {
     const tracks = tracksRef.current
@@ -92,7 +145,7 @@ function App() {
       frame = null
       const tracksRect = tracks.getBoundingClientRect()
       setConnectorSize({ width: tracks.clientWidth, height: tracks.clientHeight })
-      const eventScroll = tracks.querySelector('.all-events .event-scroll')
+      const eventScroll = tracks.querySelector('.allocation-lanes .event-scroll')
       if (eventScroll) {
         const eventScrollRect = eventScroll.getBoundingClientRect()
         setConnectorClipTop(Math.max(0, eventScrollRect.top - tracksRect.top))
@@ -138,7 +191,7 @@ function App() {
       window.removeEventListener('resize', scheduleUpdate)
       resizeObserver.disconnect()
     }
-  }, [events, vods, splitAllocations, eventsLoading])
+  }, [events, vods, eventsLoading])
 
   useEffect(() => {
     if (!projectDirectory) return
@@ -185,10 +238,16 @@ function App() {
 
     let isCurrent = true
     loadEvents(projectDirectory)
-      .then((storedEvents) => {
+      .then(async (storedEvents) => {
         if (isCurrent) {
-          setEvents(sortEventsNewestFirst(storedEvents))
-          setLoadedEventsDirectory(projectDirectory)
+          const normalizedEvents = sortEventsNewestFirst(normalizeEventAllocations(storedEvents))
+          if (normalizedEvents.some((item, index) => item !== storedEvents[index])) {
+            await saveEvents(projectDirectory, normalizedEvents)
+          }
+          if (isCurrent) {
+            setEvents(normalizedEvents)
+            setLoadedEventsDirectory(projectDirectory)
+          }
         }
       })
       .catch((error: unknown) => {
@@ -210,10 +269,15 @@ function App() {
 
   const saveProjectDirectory = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (eventWriteInProgress) return
     const directory = directoryDraft.trim()
 
     if (!isWindowsDirectory(directory)) {
       setDirectoryError('Enter an absolute Windows path, such as C:\\LoreManor.')
+      return
+    }
+    if (directory === projectDirectory) {
+      setSettingsOpen(false)
       return
     }
 
@@ -231,11 +295,13 @@ function App() {
     setVodsFetchNotice('')
     setEventExtractionError('')
     setEventExtractionNotice('')
+    setEventSaveError('')
     setProjectDirectory(directory)
     setSettingsOpen(false)
   }
 
   const clearProjectDirectory = () => {
+    if (eventWriteInProgress) return
     localStorage.removeItem(PROJECT_DIRECTORY_STORAGE_KEY)
     setProjectDirectory('')
     setChannels([])
@@ -251,6 +317,7 @@ function App() {
     setVodsFetchNotice('')
     setEventExtractionError('')
     setEventExtractionNotice('')
+    setEventSaveError('')
     setDirectoryDraft('')
     setDirectoryError('')
   }
@@ -348,7 +415,7 @@ function App() {
   }
 
   const extractEventsForVod = async (vod: Vod) => {
-    if (!projectDirectory || extractingVideoID) return
+    if (eventWritesDisabled) return
     if (!geminiApiKey.trim()) {
       setEventExtractionError('Add a Gemini API key in Settings before extracting events.')
       openSettings()
@@ -361,10 +428,12 @@ function App() {
 
     try {
       const result = await fetchVodEvents(projectDirectory, vod, geminiApiKey)
-      setEvents((currentEvents) => sortEventsNewestFirst([
-        ...currentEvents.filter((event) => !(event.sourceType === 'VOD' && event.vodId === vod.videoID)),
+      const updatedEvents = sortEventsNewestFirst(normalizeEventAllocations([
+        ...events.filter((event) => !(event.sourceType === 'VOD' && event.vodId === vod.videoID)),
         ...result.events,
       ]))
+      await saveEvents(projectDirectory, updatedEvents)
+      setEvents(updatedEvents)
       setEventExtractionNotice(
         result.transcriptReused
           ? `Extracted ${result.events.length} event${result.events.length === 1 ? '' : 's'} from the cached transcript.`
@@ -377,51 +446,144 @@ function App() {
     }
   }
 
-  const reorderEvent = (targetEventId: string) => {
-    if (!draggedEventId || draggedEventId === targetEventId) return
-
-    const draggedEvent = events.find((event) => event.eventID === draggedEventId)
-    const targetEvent = events.find((event) => event.eventID === targetEventId)
-    if (!draggedEvent || !targetEvent) return
-    if (draggedEvent.sourceType !== 'manual' || targetEvent.sourceType !== 'manual') return
-
-    setEvents((currentEvents) => {
-      const reordered = [...currentEvents]
-      const fromIndex = reordered.findIndex((event) => event.eventID === draggedEventId)
-      const toIndex = reordered.findIndex((event) => event.eventID === targetEventId)
-      const [moved] = reordered.splice(fromIndex, 1)
-      reordered.splice(toIndex, 0, moved)
-      return reordered
-    })
+  const saveEventChanges = async (updatedEvents: LoreEvent[]) => {
+    if (eventWritesDisabled) return false
+    setEventSaving(true)
+    setEventSaveError('')
+    try {
+      await saveEvents(projectDirectory, updatedEvents)
+      setEvents(updatedEvents)
+      return true
+    } catch (error) {
+      setEventSaveError(error instanceof Error ? error.message : 'Unable to save event changes.')
+      return false
+    } finally {
+      setEventSaving(false)
+    }
   }
 
-  const renderEventCard = (event: LoreEvent, isPrimary = false, trackName = 'all') => {
+  const openEventDialog = (mode: 'edit' | 'delete', event: LoreEvent) => {
+    setEventSaveError('')
+    setDescriptionDraft(event.description)
+    setEventDialog({ mode, eventID: event.eventID })
+  }
+
+  useLayoutEffect(() => {
+    if (eventDialog) eventDialogRef.current?.showModal()
+  }, [eventDialog])
+
+  const submitEventDialog = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!eventDialog) return
+    const description = descriptionDraft.trim()
+    if (eventDialog.mode === 'edit' && !description) {
+      setEventSaveError('Enter an event description.')
+      return
+    }
+    const updatedEvents = eventDialog.mode === 'delete'
+      ? events.filter(({ eventID }) => eventID !== eventDialog.eventID)
+      : events.map((item) => item.eventID === eventDialog.eventID ? { ...item, description } : item)
+    if (await saveEventChanges(updatedEvents)) eventDialogRef.current?.close()
+  }
+
+  const saveEventSpan = (event: LoreEvent, span: EventSpan) => {
+    if (span === getEventSpan(event)) return
+    void saveEventChanges(events.map((item) => item.eventID === event.eventID ? {
+      ...ensureEventAllocation(item),
+      allocatedTracks: [
+        ...ensureEventAllocation(item).allocatedTracks.filter((track) => track !== 'Story' && track !== 'Devlog'),
+        ...EVENT_SPANS[span],
+      ],
+    } : item))
+  }
+
+  const cancelResize = () => {
+    resizeStartX.current = null
+  }
+
+  const renderResizeHandle = (event: LoreEvent, edge: ResizeEdge) => {
+    const getSpanAtPointer = (pointer: PointerEvent<HTMLElement>): EventSpan => {
+      const grid = allocationGridRef.current?.getBoundingClientRect()
+      if (!grid || resizeStartX.current === null || Math.abs(pointer.clientX - resizeStartX.current) < 4) {
+        return getEventSpan(event)
+      }
+      const overDevlog = pointer.clientX < grid.left + grid.width / 2
+      return edge === 'left' ? (overDevlog ? 'both' : 'story') : (overDevlog ? 'devlog' : 'both')
+    }
+
+    return (
+      <span
+        aria-hidden="true"
+        className={`event-resize-handle ${edge}`}
+        title={`Drag to resize the ${edge} edge`}
+        onPointerDown={(pointer) => {
+          if (eventWritesDisabled || !pointer.isPrimary || pointer.button !== 0) return
+          pointer.preventDefault()
+          pointer.currentTarget.setPointerCapture(pointer.pointerId)
+          resizeStartX.current = pointer.clientX
+        }}
+        onPointerUp={(pointer) => {
+          if (!pointer.currentTarget.hasPointerCapture(pointer.pointerId)) return
+          const span = getSpanAtPointer(pointer)
+          cancelResize()
+          saveEventSpan(event, span)
+        }}
+        onLostPointerCapture={cancelResize}
+      />
+    )
+  }
+
+  const renderEventCard = (event: LoreEvent, placeholder = false) => {
     const vod = event.vodId ? vods.find((candidate) => candidate.videoID === event.vodId) : undefined
+    const span = getEventSpan(event)
+    const displayedSpan = span
     return (
       <article
-        key={event.eventID}
-        ref={(element) => {
-          const cardKey = `${event.eventID}:${trackName}`
+        ref={placeholder ? undefined : (element) => {
+          const cardKey = `${event.eventID}:allocation`
           if (element) eventCardRefs.current.set(cardKey, element)
           else eventCardRefs.current.delete(cardKey)
         }}
-        className="event-card"
-        style={event.sourceType === 'VOD' && event.vodId
-          ? { borderLeft: `4px solid ${getVodColor(event.vodId)}` }
-          : undefined}
-        draggable={isPrimary && event.sourceType === 'manual'}
-        onDragStart={isPrimary ? () => setDraggedEventId(event.eventID) : undefined}
-        onDragEnd={isPrimary ? () => setDraggedEventId(null) : undefined}
-        onDragOver={isPrimary ? (dragEvent) => dragEvent.preventDefault() : undefined}
-        onDrop={isPrimary ? () => reorderEvent(event.eventID) : undefined}
+        aria-hidden={placeholder || undefined}
+        className={`event-card allocated-event${placeholder ? ' event-card-placeholder' : ''}`}
+        style={{
+          ...(event.sourceType === 'VOD' && event.vodId ? { borderLeft: `4px solid ${getVodColor(event.vodId)}` } : {}),
+          ...(vod?.thumbnailURL ? {
+            backgroundImage: `linear-gradient(90deg, rgba(34, 32, 29, 0.30) 0%, rgba(34, 32, 29, 0.85) 55%, var(--panel-raised) 100%), url("${vod.thumbnailURL}")`,
+          } : {}),
+        }}
       >
-        {vod?.thumbnailURL && (
-          <img className="event-card-thumbnail" src={vod.thumbnailURL} alt="" loading="lazy" />
-        )}
         <span>{event.description}</span>
+        <time className="event-card-datetime" dateTime={event.datetime ?? undefined}>
+          {getEventDateTimeLabel(event)}
+        </time>
+        <div className="event-card-actions">
+          {vod && (
+            <a
+              className="event-youtube-button"
+              href={getTimestampedVideoUrl(vod.videoURL, event.starttime)}
+              target="_blank"
+              rel="noreferrer"
+              tabIndex={placeholder ? -1 : undefined}
+              aria-label={`Watch event at ${event.starttime}`}
+              title={`Watch at ${event.starttime}`}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="2" y="5" width="20" height="14" rx="4" fill="currentColor" />
+                <path d="M10 9v6l5-3z" fill="#fff" />
+              </svg>
+            </a>
+          )}
+          <button type="button" disabled={placeholder || eventWritesDisabled} onClick={() => openEventDialog('edit', event)}>Edit</button>
+          <button type="button" disabled={placeholder || eventWritesDisabled} onClick={() => openEventDialog('delete', event)}>Delete</button>
+        </div>
+        {!placeholder && displayedSpan !== 'devlog' && renderResizeHandle(event, 'left')}
+        {!placeholder && displayedSpan !== 'story' && renderResizeHandle(event, 'right')}
       </article>
     )
   }
+
+  const allocatedEvents = events
 
   return (
     <main className="workspace">
@@ -429,6 +591,12 @@ function App() {
         <div className="brand">
           <img className="brand-mark" src="/src/assets/lore-manor-icon.svg" alt="" />
           <span>Lore Manor</span>
+          {projectDirectory && (
+            <>
+              <span className="brand-project-separator" aria-hidden="true">|</span>
+              <span className="brand-project-name" title={projectDirectory}>{getProjectName(projectDirectory)}</span>
+            </>
+          )}
         </div>
         <div className="topbar-actions">
           <button className="secondary-button" type="button">
@@ -538,7 +706,7 @@ function App() {
                       className="channel-fetch-button event-extract-button"
                       type="button"
                       onClick={() => void extractEventsForVod(vod)}
-                      disabled={!projectDirectory || Boolean(extractingVideoID) || eventsLoading}
+                      disabled={eventWritesDisabled}
                     >
                       {extractingVideoID === vod.videoID ? 'Extracting…' : 'Extract events'}
                     </button>
@@ -566,15 +734,6 @@ function App() {
               <h1 id="events-heading">Events</h1>
             </div>
             <div className="event-actions">
-              <button
-                className={`view-toggle ${splitAllocations ? 'active' : ''}`}
-                type="button"
-                onClick={() => setSplitAllocations((split) => !split)}
-                aria-pressed={splitAllocations}
-              >
-                <span aria-hidden="true">▦</span>
-                Allocation tracks
-              </button>
               <button className="add-event-button" type="button">
                 <span aria-hidden="true">+</span>
                 Add event
@@ -582,55 +741,54 @@ function App() {
             </div>
           </div>
 
-          <div className={`events-content ${splitAllocations ? 'split' : ''}`}>
-            <div className="allocation-column all-events">
-              <div className="allocation-header">
-                <span>All events</span>
-                <span className="count">{events.length}</span>
+          {eventSaveError && !eventDialog && (
+            <p className="field-error event-save-error" role="alert">{eventSaveError}</p>
+          )}
+          <div className="events-content">
+            <div className="allocation-column allocation-lanes" aria-label="Event allocation lanes" role="group">
+              <div className="allocation-headers">
+                {EVENT_LANES.map((trackName) => (
+                  <div className="allocation-header" key={trackName}>
+                    <span>{trackName}</span>
+                    <span className="count">
+                      {events.filter((event) => getEventSpan(event) === 'both' || getEventSpan(event) === trackName.toLowerCase()).length}
+                    </span>
+                  </div>
+                ))}
               </div>
-              <div
-                className="track-scroll event-scroll"
-                onDragOver={(event) => event.preventDefault()}
-              >
+              <div className="track-scroll event-scroll">
                 {eventsLoading ? (
                   <div className="empty-state events-empty"><p>Loading events…</p></div>
                 ) : eventsLoadError ? (
                   <div className="empty-state events-empty"><p className="field-error" role="alert">{eventsLoadError}</p></div>
-                ) : events.length === 0 ? (
+                ) : allocatedEvents.length === 0 ? (
                   <div className="empty-state events-empty">
                     <div className="empty-icon timeline-icon" aria-hidden="true">⋮</div>
                     <h2>No events</h2>
                     <p>Extracted moments and manually added events will appear here.</p>
                   </div>
                 ) : (
-                  events.map((event) => renderEventCard(event, true))
+                  <div className="allocation-grid" ref={allocationGridRef}>
+                    {allocatedEvents.map((event) => {
+                      const span = getEventSpan(event)
+                      return (
+                        <div className={`allocation-row${span === 'both' ? ' spanning' : ''}`} key={event.eventID}>
+                          <div className="allocation-slot">
+                            {span === 'devlog' ? renderEventCard(event) : renderEventCard(event, true)}
+                          </div>
+                          <div className="allocation-slot">
+                            {span === 'story' ? renderEventCard(event) : renderEventCard(event, true)}
+                          </div>
+                          {span === 'both' && (
+                            <div className="allocation-span-overlay">{renderEventCard(event)}</div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
             </div>
-
-            {splitAllocations && (
-              <>
-                {(['Story', 'Devlog'] as const).map((trackName) => (
-                  <div className="allocation-column" key={trackName}>
-                    <div className="allocation-header">
-                      <span>{trackName}</span>
-                      <span className="count">
-                        {events.filter((event) => event.allocatedTracks.includes(trackName)).length}
-                      </span>
-                    </div>
-                    <div className="track-scroll event-scroll">
-                      {events.filter((event) => event.allocatedTracks.includes(trackName)).length === 0 ? (
-                        <div className="allocation-empty">No {trackName.toLowerCase()} allocations</div>
-                      ) : (
-                        events
-                          .filter((event) => event.allocatedTracks.includes(trackName))
-                          .map((event) => renderEventCard(event, false, trackName))
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
           </div>
         </section>
       </div>
@@ -669,8 +827,8 @@ function App() {
               />
               {directoryError && <p className="field-error" id="directory-error">{directoryError}</p>}
               <div className="settings-actions">
-                <button className="clear-button" type="button" onClick={clearProjectDirectory} disabled={!projectDirectory}>Clear</button>
-                <button className="save-button" type="submit">Save directory</button>
+                <button className="clear-button" type="button" onClick={clearProjectDirectory} disabled={!projectDirectory || eventWriteInProgress}>Clear</button>
+                <button className="save-button" type="submit" disabled={eventWriteInProgress}>Save directory</button>
               </div>
             </form>
             <form className="settings-form settings-key-form" onSubmit={saveGeminiApiKey}>
@@ -698,6 +856,60 @@ function App() {
             </form>
           </section>
         </div>
+      )}
+
+      {eventDialog && (
+        <dialog
+          ref={eventDialogRef}
+          className="settings-dialog event-dialog"
+          aria-labelledby="event-dialog-heading"
+          onClose={() => {
+            setEventDialog(null)
+            setEventSaveError('')
+          }}
+          onCancel={(event) => {
+            if (eventSaving) event.preventDefault()
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            if (!eventSaving) event.currentTarget.close()
+          }}
+        >
+          <div className="settings-header">
+            <div>
+              <p className="track-kicker">Timeline</p>
+              <h2 id="event-dialog-heading">{eventDialog.mode === 'edit' ? 'Edit event' : 'Delete event'}</h2>
+            </div>
+          </div>
+          <form className="settings-form" onSubmit={(event) => void submitEventDialog(event)}>
+            {eventDialog.mode === 'edit' ? (
+              <>
+                <label htmlFor="event-description">Description</label>
+                <textarea
+                  id="event-description"
+                  rows={5}
+                  value={descriptionDraft}
+                  disabled={eventSaving}
+                  onChange={(event) => setDescriptionDraft(event.target.value)}
+                  required
+                />
+              </>
+            ) : (
+              <>
+                <p className="field-description">Delete this event from the timeline? Source files and clips will not be deleted.</p>
+                <p className="event-description">{descriptionDraft}</p>
+              </>
+            )}
+            {eventSaveError && <p className="field-error" role="alert">{eventSaveError}</p>}
+            <div className="settings-actions">
+              <button className="clear-button" type="button" onClick={() => eventDialogRef.current?.close()} disabled={eventSaving}>Cancel</button>
+              <button className="save-button" type="submit" disabled={eventWritesDisabled}>
+                {eventSaving ? 'Saving...' : eventDialog.mode === 'edit' ? 'Save description' : 'Delete event'}
+              </button>
+            </div>
+          </form>
+        </dialog>
       )}
 
       {channelFormOpen && (

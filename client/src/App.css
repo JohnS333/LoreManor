@@ -679,7 +679,86 @@ button:focus-visible {
 .allocation-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+}
+
+.allocation-grid.is-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+.event-insert-divider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+}
+
+.event-insert-divider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--gold);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.event-insert-divider:hover::before,
+.event-insert-divider:focus-within::before {
+  opacity: 1;
+}
+
+.event-insert-button {
+  position: relative;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-warm);
+  border-radius: 50%;
+  background: var(--panel-header);
+  color: var(--gold);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.event-insert-divider:hover .event-insert-button,
+.event-insert-divider:focus-within .event-insert-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.event-insert-button:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: var(--wood-tint-hover);
+  color: var(--gold-bright);
+  transform: scale(1.1);
+}
+
+.event-insert-button:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.event-insert-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.allocation-grid.is-dragging .event-insert-divider {
+  pointer-events: none;
+  opacity: 0.35;
 }
 
 .allocation-row {
@@ -766,12 +845,23 @@ button:focus-visible {
   box-shadow: var(--bevel-highlight), 0 5px 12px rgba(0, 0, 0, 0.16);
 }
 
-.event-card[draggable='true'] {
+.event-card.manual-event {
   cursor: grab;
+  border-left: 4px solid var(--gold);
+  touch-action: none;
 }
 
-.event-card[draggable='true']:active {
+.event-card.manual-event:active,
+.event-card.dragging-preview {
   cursor: grabbing;
+}
+
+.event-card.dragging-preview {
+  border-color: var(--gold-bright);
+  border-style: dashed;
+  box-shadow: 0 0 0 1px var(--gold), 0 10px 24px rgba(0, 0, 0, 0.42);
+  opacity: 0.92;
+  z-index: 6;
 }
 
 .allocated-event {
@@ -789,7 +879,7 @@ button:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-top: 5px;
+  margin-top: 6px;
 }
 
 .event-card-datetime {
@@ -817,51 +907,60 @@ button:focus-visible {
 
 .event-card-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  margin-top: 8px;
+  margin-left: auto;
 }
 
-.event-youtube-button {
+.event-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 6px;
-  border: 1px solid var(--line-warm);
-  border-radius: 4px;
-  background: var(--night-soft);
-  color: #e62117;
-  line-height: 1;
-  text-decoration: none;
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
-}
-
-.event-youtube-button:hover {
-  background: var(--panel-hover);
-  border-color: var(--line-hover);
-  color: #ff2b2b;
-}
-
-.event-youtube-button:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 2px;
-}
-
-.event-youtube-button svg {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
-
-.event-card-actions button,
-.event-card-actions select {
-  padding: 3px 5px;
+  width: 24px;
+  height: 22px;
+  padding: 0;
   border: 1px solid var(--line-warm);
   border-radius: 4px;
   background: var(--night-soft);
   color: var(--text);
-  font: inherit;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.event-action-icon:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: var(--line-hover);
+  color: var(--gold-bright);
+}
+
+.event-action-icon:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.event-action-icon svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.event-youtube-button {
+  color: #e62117;
+}
+
+.event-youtube-button:hover:not(:disabled) {
+  color: #ff2b2b;
+}
+
+.event-youtube-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.event-delete-button:hover:not(:disabled) {
+  color: #f08a80;
 }
 
 .event-card-actions :disabled {

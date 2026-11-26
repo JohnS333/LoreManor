@@ -97,9 +97,14 @@ requests to Express on port `3001`.
 - The main page has three primary vertical tracks: **Channels**, **VODs**, and
   **Events**. They are independently scrollable and remain usable when additional
   allocation tracks are shown.
-- The Events track is ordered chronologically. Events derived from VODs cannot
-  be manually reordered. Only events with `sourceType: "manual"` can be
-  reordered with drag and drop.
+- The Events track is ordered chronologically. Events derived from VODs or other
+  external sources are locked in the timeline and cannot be manually reordered.
+  A horizontal divider with a **+** button appears between each pair of event
+  cards to insert a `sourceType: "manual"` event whose starting datetime is the
+  midpoint between the event above and the event below. Manually added events
+  can be dragged and dropped anywhere in the timeline with live predictive
+  snapping; releasing the mouse confirms the new position and updates the
+  event's datetime to the midpoint of its new neighbors.
 - The Events track contains two side-by-side allocation lanes: **Devlog** on
   the left and **Story** on the right. Events belong to at least one lane;
   events with no Story or Devlog allocation default to Devlog.

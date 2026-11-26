@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import type { Channel, LoreEvent, Vod } from '../../shared/types/api'
 import { fetchChannelVods, fetchVodEvents, loadChannels, loadEvents, loadVods, saveChannels, saveEvents } from './services/api'
 import './App.css'
@@ -98,6 +98,22 @@ const sortEventsNewestFirst = (events: LoreEvent[]) => [...events].sort((first, 
   return Date.parse(second.datetime) - Date.parse(first.datetime)
 })
 
+const computeInsertionDatetime = (above?: LoreEvent, below?: LoreEvent): string => {
+  const aboveMs = above?.datetime ? Date.parse(above.datetime) : NaN
+  const belowMs = below?.datetime ? Date.parse(below.datetime) : NaN
+
+  if (Number.isFinite(aboveMs) && Number.isFinite(belowMs)) {
+    return new Date(Math.round((aboveMs + belowMs) / 2)).toISOString()
+  }
+  if (Number.isFinite(aboveMs)) {
+    return new Date(aboveMs - 60_000).toISOString()
+  }
+  if (Number.isFinite(belowMs)) {
+    return new Date(belowMs + 60_000).toISOString()
+  }
+  return new Date().toISOString()
+}
+
 const isWindowsDirectory = (directory: string) =>
   /^[a-zA-Z]:\\(?:[^<>:"/\\|?*]+\\?)*$/.test(directory) ||
   /^\\\\[^<>:"/\\|?*]+\\[^<>:"/\\|?*]+(?:\\[^<>:"/\\|?*]+)*\\?$/.test(directory)
@@ -149,7 +165,11 @@ function App() {
   const [eventExtractionNotice, setEventExtractionNotice] = useState('')
   const [eventSaving, setEventSaving] = useState(false)
   const [eventSaveError, setEventSaveError] = useState('')
-  const [eventDialog, setEventDialog] = useState<{ mode: 'edit' | 'delete'; eventID: string } | null>(null)
+  const [eventDialog, setEventDialog] = useState<
+    | { mode: 'add'; datetime: string }
+    | { mode: 'edit' | 'delete'; eventID: string }
+    | null
+  >(null)
   const eventDialogRef = useRef<HTMLDialogElement>(null)
   const [descriptionDraft, setDescriptionDraft] = useState('')
   const resizeStartX = useRef<number | null>(null)
@@ -157,6 +177,11 @@ function App() {
   const tracksRef = useRef<HTMLDivElement>(null)
   const vodCardRefs = useRef(new Map<string, HTMLElement>())
   const eventCardRefs = useRef(new Map<string, HTMLElement>())
+  const eventRowRefs = useRef(new Map<string, HTMLDivElement>())
+  const eventsRef = useRef(events)
+  const [dragState, setDragState] = useState<{ eventID: string; originalIndex: number; targetIndex: number } | null>(null)
+  const dragStateRef = useRef<{ eventID: string; originalIndex: number; targetIndex: number } | null>(null)
+  const dragCleanupRef = useRef<(() => void) | null>(null)
   const [connectorPaths, setConnectorPaths] = useState<{ path: string; color: string }[]>([])
   const [connectorSize, setConnectorSize] = useState({ width: 0, height: 0 })
   const [connectorClipTop, setConnectorClipTop] = useState(0)
@@ -222,7 +247,15 @@ function App() {
       window.removeEventListener('resize', scheduleUpdate)
       resizeObserver.disconnect()
     }
-  }, [events, vods, eventsLoading])
+  }, [events, vods, eventsLoading, dragState?.targetIndex])
+
+  useEffect(() => {
+    eventsRef.current = events
+  }, [events])
+
+  useEffect(() => () => {
+    dragCleanupRef.current?.()
+  }, [])
 
   useEffect(() => {
     if (!projectDirectory) return
@@ -493,6 +526,13 @@ function App() {
     }
   }
 
+  const openAddEventDialog = (above?: LoreEvent, below?: LoreEvent) => {
+    if (eventWritesDisabled) return
+    setEventSaveError('')
+    setDescriptionDraft('')
+    setEventDialog({ mode: 'add', datetime: computeInsertionDatetime(above, below) })
+  }
+
   const openEventDialog = (mode: 'edit' | 'delete', event: LoreEvent) => {
     setEventSaveError('')
     setDescriptionDraft(event.description)
@@ -507,14 +547,115 @@ function App() {
     event.preventDefault()
     if (!eventDialog) return
     const description = descriptionDraft.trim()
-    if (eventDialog.mode === 'edit' && !description) {
+    if ((eventDialog.mode === 'add' || eventDialog.mode === 'edit') && !description) {
       setEventSaveError('Enter an event description.')
       return
     }
-    const updatedEvents = eventDialog.mode === 'delete'
-      ? events.filter(({ eventID }) => eventID !== eventDialog.eventID)
-      : events.map((item) => item.eventID === eventDialog.eventID ? { ...item, description } : item)
+    const updatedEvents = eventDialog.mode === 'add'
+      ? sortEventsNewestFirst([
+        ...events,
+        {
+          eventID: `manual-${crypto.randomUUID()}`,
+          sourceType: 'manual',
+          vodId: null,
+          datetime: eventDialog.datetime,
+          starttime: '',
+          endtime: '',
+          description,
+          shortsViable: null,
+          allocatedTracks: ['Devlog'],
+          projectAllocations: [],
+        },
+      ])
+      : eventDialog.mode === 'delete'
+        ? events.filter(({ eventID }) => eventID !== eventDialog.eventID)
+        : events.map((item) => item.eventID === eventDialog.eventID ? { ...item, description } : item)
     if (await saveEventChanges(updatedEvents)) eventDialogRef.current?.close()
+  }
+
+  const startEventDrag = (pointer: PointerEvent<HTMLElement>, event: LoreEvent) => {
+    if (eventWritesDisabled || !pointer.isPrimary || pointer.button !== 0 || event.sourceType !== 'manual') return
+    if ((pointer.target as HTMLElement).closest('button, a, input, textarea, select, .event-resize-handle')) return
+
+    const originalIndex = eventsRef.current.findIndex((item) => item.eventID === event.eventID)
+    if (originalIndex < 0) return
+
+    dragCleanupRef.current?.()
+    const pointerId = pointer.pointerId
+    const startY = pointer.clientY
+    const eventID = event.eventID
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('keydown', onKeyDown)
+      dragCleanupRef.current = null
+    }
+
+    const onCancel = () => {
+      cleanup()
+      dragStateRef.current = null
+      setDragState(null)
+    }
+
+    const onKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === 'Escape') onCancel()
+    }
+
+    const onPointerMove = (moveEvent: globalThis.PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return
+      if (!dragStateRef.current) {
+        if (Math.abs(moveEvent.clientY - startY) < 4) return
+        const initial = { eventID, originalIndex, targetIndex: originalIndex }
+        dragStateRef.current = initial
+        setDragState(initial)
+      }
+
+      const otherEvents = eventsRef.current.filter((item) => item.eventID !== eventID)
+      let nextTargetIndex = 0
+      for (const other of otherEvents) {
+        const row = eventRowRefs.current.get(other.eventID)
+        if (!row) continue
+        const rect = row.getBoundingClientRect()
+        if (moveEvent.clientY > rect.top + rect.height / 2) nextTargetIndex += 1
+      }
+
+      if (dragStateRef.current.targetIndex !== nextTargetIndex) {
+        const updated = { ...dragStateRef.current, targetIndex: nextTargetIndex }
+        dragStateRef.current = updated
+        setDragState(updated)
+      }
+    }
+
+    const onPointerUp = (upEvent: globalThis.PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) return
+      const finalDrag = dragStateRef.current
+      cleanup()
+      dragStateRef.current = null
+      setDragState(null)
+
+      if (!finalDrag || finalDrag.targetIndex === finalDrag.originalIndex) return
+      const currentEvents = eventsRef.current
+      const draggedEvent = currentEvents.find((item) => item.eventID === finalDrag.eventID)
+      if (!draggedEvent) return
+
+      const otherEvents = currentEvents.filter((item) => item.eventID !== finalDrag.eventID)
+      const newDatetime = computeInsertionDatetime(
+        otherEvents[finalDrag.targetIndex - 1],
+        otherEvents[finalDrag.targetIndex],
+      )
+      const updatedEvent: LoreEvent = { ...draggedEvent, datetime: newDatetime }
+      const reordered = [...otherEvents]
+      reordered.splice(finalDrag.targetIndex, 0, updatedEvent)
+      void saveEventChanges(sortEventsNewestFirst(reordered))
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onCancel)
+    window.addEventListener('keydown', onKeyDown)
+    dragCleanupRef.current = cleanup
   }
 
   const saveEventSpan = (event: LoreEvent, span: EventSpan) => {
@@ -569,6 +710,8 @@ function App() {
     const span = getEventSpan(event)
     const displayedSpan = span
     const durationLabel = getEventDurationLabel(event)
+    const isManual = event.sourceType === 'manual'
+    const isDragging = !placeholder && dragState?.eventID === event.eventID
     return (
       <article
         ref={placeholder ? undefined : (element) => {
@@ -577,7 +720,8 @@ function App() {
           else eventCardRefs.current.delete(cardKey)
         }}
         aria-hidden={placeholder || undefined}
-        className={`event-card allocated-event${placeholder ? ' event-card-placeholder' : ''}`}
+        className={`event-card allocated-event${placeholder ? ' event-card-placeholder' : ''}${isManual ? ' manual-event' : ''}${isDragging ? ' dragging-preview' : ''}`}
+        onPointerDown={placeholder || !isManual ? undefined : (pointer) => startEventDrag(pointer, event)}
         style={{
           ...(event.sourceType === 'VOD' && event.vodId ? { borderLeft: `4px solid ${getVodColor(event.vodId)}` } : {}),
           ...(vod?.thumbnailURL ? {
@@ -595,26 +739,53 @@ function App() {
               {durationLabel}
             </span>
           )}
-        </div>
-        <div className="event-card-actions">
-          {vod && (
-            <a
-              className="event-youtube-button"
-              href={getTimestampedVideoUrl(vod.videoURL, event.starttime)}
-              target="_blank"
-              rel="noreferrer"
-              tabIndex={placeholder ? -1 : undefined}
-              aria-label={`Watch event at ${event.starttime}`}
-              title={`Watch at ${event.starttime}`}
+          <div className="event-card-actions">
+            {vod && (
+              <a
+                className="event-action-icon event-youtube-button"
+                href={getTimestampedVideoUrl(vod.videoURL, event.starttime)}
+                target="_blank"
+                rel="noreferrer"
+                tabIndex={placeholder ? -1 : undefined}
+                aria-label={`Watch event at ${event.starttime}`}
+                title={`Watch at ${event.starttime}`}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="2" y="5" width="20" height="14" rx="4" fill="currentColor" />
+                  <path d="M10 9v6l5-3z" fill="#fff" />
+                </svg>
+              </a>
+            )}
+            <button
+              type="button"
+              className="event-action-icon"
+              disabled={placeholder || eventWritesDisabled}
+              aria-label="Edit event"
+              title="Edit event"
+              onClick={() => openEventDialog('edit', event)}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="2" y="5" width="20" height="14" rx="4" fill="currentColor" />
-                <path d="M10 9v6l5-3z" fill="#fff" />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
               </svg>
-            </a>
-          )}
-          <button type="button" disabled={placeholder || eventWritesDisabled} onClick={() => openEventDialog('edit', event)}>Edit</button>
-          <button type="button" disabled={placeholder || eventWritesDisabled} onClick={() => openEventDialog('delete', event)}>Delete</button>
+            </button>
+            <button
+              type="button"
+              className="event-action-icon event-delete-button"
+              disabled={placeholder || eventWritesDisabled}
+              aria-label="Delete event"
+              title="Delete event"
+              onClick={() => openEventDialog('delete', event)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 6h18" />
+                <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+            </button>
+          </div>
         </div>
         {!placeholder && displayedSpan !== 'devlog' && renderResizeHandle(event, 'left')}
         {!placeholder && displayedSpan !== 'story' && renderResizeHandle(event, 'right')}
@@ -622,7 +793,20 @@ function App() {
     )
   }
 
-  const allocatedEvents = events
+  const allocatedEvents = (() => {
+    if (!dragState) return events
+    const draggedEvent = events.find((item) => item.eventID === dragState.eventID)
+    if (!draggedEvent) return events
+    const otherEvents = events.filter((item) => item.eventID !== dragState.eventID)
+    const previewDatetime = computeInsertionDatetime(
+      otherEvents[dragState.targetIndex - 1],
+      otherEvents[dragState.targetIndex],
+    )
+    const previewEvent: LoreEvent = { ...draggedEvent, datetime: previewDatetime }
+    const reordered = [...otherEvents]
+    reordered.splice(dragState.targetIndex, 0, previewEvent)
+    return reordered
+  })()
 
   return (
     <main className="workspace">
@@ -773,7 +957,12 @@ function App() {
               <h1 id="events-heading">Events</h1>
             </div>
             <div className="event-actions">
-              <button className="add-event-button" type="button">
+              <button
+                className="add-event-button"
+                type="button"
+                disabled={eventWritesDisabled}
+                onClick={() => openAddEventDialog(undefined, events[0])}
+              >
                 <span aria-hidden="true">+</span>
                 Add event
               </button>
@@ -807,21 +996,44 @@ function App() {
                     <p>Extracted moments and manually added events will appear here.</p>
                   </div>
                 ) : (
-                  <div className="allocation-grid" ref={allocationGridRef}>
-                    {allocatedEvents.map((event) => {
+                  <div className={`allocation-grid${dragState ? ' is-dragging' : ''}`} ref={allocationGridRef}>
+                    {allocatedEvents.map((event, index) => {
                       const span = getEventSpan(event)
+                      const isDraggingRow = dragState?.eventID === event.eventID
                       return (
-                        <div className={`allocation-row${span === 'both' ? ' spanning' : ''}`} key={event.eventID}>
-                          <div className="allocation-slot">
-                            {span === 'devlog' ? renderEventCard(event) : renderEventCard(event, true)}
+                        <Fragment key={event.eventID}>
+                          <div
+                            className={`allocation-row${span === 'both' ? ' spanning' : ''}${isDraggingRow ? ' dragging-row' : ''}`}
+                            ref={(element) => {
+                              if (element) eventRowRefs.current.set(event.eventID, element)
+                              else eventRowRefs.current.delete(event.eventID)
+                            }}
+                          >
+                            <div className="allocation-slot">
+                              {span === 'devlog' ? renderEventCard(event) : renderEventCard(event, true)}
+                            </div>
+                            <div className="allocation-slot">
+                              {span === 'story' ? renderEventCard(event) : renderEventCard(event, true)}
+                            </div>
+                            {span === 'both' && (
+                              <div className="allocation-span-overlay">{renderEventCard(event)}</div>
+                            )}
                           </div>
-                          <div className="allocation-slot">
-                            {span === 'story' ? renderEventCard(event) : renderEventCard(event, true)}
-                          </div>
-                          {span === 'both' && (
-                            <div className="allocation-span-overlay">{renderEventCard(event)}</div>
+                          {index < allocatedEvents.length - 1 && (
+                            <div className="event-insert-divider">
+                              <button
+                                type="button"
+                                className="event-insert-button"
+                                disabled={eventWritesDisabled || Boolean(dragState)}
+                                aria-label="Add manual event between these events"
+                                title="Add manual event here"
+                                onClick={() => openAddEventDialog(allocatedEvents[index], allocatedEvents[index + 1])}
+                              >
+                                <span aria-hidden="true">+</span>
+                              </button>
+                            </div>
                           )}
-                        </div>
+                        </Fragment>
                       )
                     })}
                   </div>
@@ -918,12 +1130,22 @@ function App() {
           <div className="settings-header">
             <div>
               <p className="track-kicker">Timeline</p>
-              <h2 id="event-dialog-heading">{eventDialog.mode === 'edit' ? 'Edit event' : 'Delete event'}</h2>
+              <h2 id="event-dialog-heading">
+                {eventDialog.mode === 'add' ? 'Add manual event' : eventDialog.mode === 'edit' ? 'Edit event' : 'Delete event'}
+              </h2>
             </div>
           </div>
           <form className="settings-form" onSubmit={(event) => void submitEventDialog(event)}>
-            {eventDialog.mode === 'edit' ? (
+            {eventDialog.mode === 'add' || eventDialog.mode === 'edit' ? (
               <>
+                {eventDialog.mode === 'add' && (
+                  <p className="field-description">
+                    Starting time:{' '}
+                    <time dateTime={eventDialog.datetime}>
+                      {new Date(eventDialog.datetime).toLocaleDateString()} · {new Date(eventDialog.datetime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                    </time>
+                  </p>
+                )}
                 <label htmlFor="event-description">Description</label>
                 <textarea
                   id="event-description"
@@ -944,7 +1166,7 @@ function App() {
             <div className="settings-actions">
               <button className="clear-button" type="button" onClick={() => eventDialogRef.current?.close()} disabled={eventSaving}>Cancel</button>
               <button className="save-button" type="submit" disabled={eventWritesDisabled}>
-                {eventSaving ? 'Saving...' : eventDialog.mode === 'edit' ? 'Save description' : 'Delete event'}
+                {eventSaving ? 'Saving...' : eventDialog.mode === 'add' ? 'Add event' : eventDialog.mode === 'edit' ? 'Save description' : 'Delete event'}
               </button>
             </div>
           </form>

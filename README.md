@@ -5,9 +5,50 @@ Ideally keeping everything in chronological order to make it VERY EASY to alloca
 
 This is a frontend ui that hooks directly into your windows folder.
 
-# Data Model and Flow:
+# Data Model and Flow
 
-- As of 11/22/26 the persistence layer is strictly a folder on windows that contains events.json, channels.json, vods.json and videoID.vtt caption files. that folder alsog contains the mp4 videos that are extracted.
+## Data Model
+
+Each collection is stored as a JSON array in the active project directory. The
+client and server share the definitions in [shared/types/api.ts](shared/types/api.ts).
+
+### Channel (`channels.json`)
+
+- `channelURL` (`string`) — YouTube channel URL.
+- `channelName` (`string`) — Display name, inferred from the URL when possible.
+
+### VOD (`vods.json`)
+
+- `videoID` (`string`) — YouTube video ID used to merge fetched VODs and link events.
+- `videoURL` (`string`) — YouTube watch URL.
+- `datetime` (`string`) — Start or release time as an ISO 8601 UTC string. Fetching falls back to an upload or release date at midnight UTC, or an empty string when no date is available.
+- `vodTitle` (`string`) — Video title.
+- `thumbnailURL` (`string`) — Preview image URL.
+
+### Event (`events.json`)
+
+- `eventID` (`string`) — Event identifier.
+- `sourceType` — `VOD`, `manual`, or `Discord`.
+- `vodId` (`string` or `null`) — Source VOD's `videoID`, or `null` when the event has no source VOD.
+- `datetime` (`string` or `null`) — Absolute timeline time in ISO 8601 format, or `null` when unavailable. For extracted events, this is the VOD datetime plus `starttime`.
+- `starttime` (`string`) — Start offset within the VOD in `HH:MM:SS.mmm` for extracted events. Manual events use an empty string.
+- `endtime` (`string`) — End offset within the VOD in `HH:MM:SS.mmm` for extracted events. Manual events use an empty string.
+- `description` (`string`) — Text describing what happened.
+- `shortsViable` (`boolean` or `null`) — Suitability for a short-form clip, or `null` when unset.
+- `allocatedTracks` (`string[]`) — Allocation track names such as `Story` and `Devlog`.
+- `projectAllocations` (`string[]`) — Associated video project IDs (`projectID`).
+
+### Allocation Track (`allocation-tracks.json`)
+
+Each entry is a non-empty string naming a track. The main Events lanes are
+`Story` and `Devlog`.
+
+### Video Project (`projects.json`)
+
+- `projectID` (`string`) — Project identifier.
+- `projectName` (`string`) — Display name.
+- `projectType` — `Storyline` or `Devlog`.
+- `eventIDs` (`string[]`) — Event identifiers (`eventID`) included in the project.
 
 ## Data Model and Flow Diagram
 
@@ -18,11 +59,11 @@ caption files, and extracted video clips shown below.
 flowchart LR
     subgraph Client
         direction TB
-        channelInput["Channels:<br/>{ channelURL }"]
+        channelInput["Channels"]
         fetchVods["Channel:<br/>Fetch Vods Button"]
-        vods["Vods (frontend data model):<br/>videoID<br/>videoURL<br/>datetime<br/>vod title<br/>thumbnailURL"]
+        vods["VODs"]
         extractEvents["Extract<br/>Events Button"]
-        events["Events (frontend data model):<br/>eventID<br/>sourceType (VOD, manual, Discord)<br/>VOD ID (same as videoID in URL)<br/>datetime<br/>starttime<br/>endtime<br/>Description of the event<br/>trackAllocations: [Story or Devlog]"]
+        events["Events"]
         downloadClip["Video ? directory location : <br/> Download clip button"]
 
         channelInput --- fetchVods
@@ -74,7 +115,7 @@ flowchart LR
 - Use a single canonical schema for frontend state and persisted JSON so field
   names and types cannot drift between the client and server.
 - Add stable identifiers and explicit relationships, such as a `channelId` on
-  VODs and a `vodId` on events, instead of relying on URLs.
+  VODs, following the existing `vodId` relationship on events.
 - Store timestamps in one documented format, preferably ISO 8601 in UTC, and
   validate that event start and end times fall within the source VOD.
 - Define how concurrent state changes are handled when more than one process

@@ -968,6 +968,16 @@ button:focus-visible {
   opacity: 0.55;
 }
 
+.event-shorts-button,
+.event-shorts-button:hover:not(:disabled) {
+  color: #a6a6a6;
+}
+
+.event-shorts-button[aria-pressed='true'],
+.event-shorts-button[aria-pressed='true']:hover:not(:disabled) {
+  color: #ff2b2b;
+}
+
 .event-resize-handle {
   position: absolute;
   top: 0;

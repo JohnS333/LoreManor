@@ -710,6 +710,7 @@ function App() {
     const span = getEventSpan(event)
     const displayedSpan = span
     const durationLabel = getEventDurationLabel(event)
+    const isShortsViable = event.shortsViable === true
     const isManual = event.sourceType === 'manual'
     const isDragging = !placeholder && dragState?.eventID === event.eventID
     return (
@@ -756,6 +757,21 @@ function App() {
                 </svg>
               </a>
             )}
+            <button
+              type="button"
+              className="event-action-icon event-shorts-button"
+              disabled={placeholder || eventWritesDisabled}
+              aria-label="Shorts viable"
+              aria-pressed={isShortsViable}
+              title={isShortsViable ? 'Unmark as Shorts viable' : 'Mark as Shorts viable'}
+              onClick={() => void saveEventChanges(events.map((item) => (
+                item.eventID === event.eventID ? { ...item, shortsViable: !isShortsViable } : item
+              )))}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" fillRule="evenodd" d="M17.77 10.32c1.96-1.06 2.7-3.53 1.65-5.5-1.05-1.96-3.5-2.7-5.46-1.64L6.23 7.35c-1.96 1.06-2.7 3.53-1.65 5.5.4.75 1 1.32 1.7 1.68l-.05.03c-1.96 1.06-2.7 3.53-1.65 5.5 1.05 1.96 3.5 2.7 5.46 1.64l7.73-4.17c1.96-1.06 2.7-3.53 1.65-5.5a4.04 4.04 0 0 0-1.7-1.68l.05-.03ZM10 9v7l6-3.5L10 9Z" />
+              </svg>
+            </button>
             <button
               type="button"
               className="event-action-icon"

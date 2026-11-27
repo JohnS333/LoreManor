@@ -163,6 +163,8 @@ requests to Express on port `3001`.
   source VOD's thumbnail as a background image fading out from left to right,
   and include a YouTube button that opens the source video at the event's start
   timestamp.
+- Click the YouTube Shorts icon on an event card to toggle `shortsViable` in
+  `events.json`. The icon is red when marked and gray when unmarked.
 - In the allocation lanes, drag an event card's edge across the divider to
   expand it into both lanes or shrink it back to one.
   The card's Story/Devlog membership is saved in `allocatedTracks` in `events.json`.

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent, type RefObject } from 'react'
 import type { Channel, LoreEvent, Vod } from '../../shared/types/api'
 import { fetchChannelVods, fetchVodEvents, loadChannels, loadEvents, loadVods, saveChannels, saveEvents } from './services/api'
 import './App.css'
@@ -98,6 +98,13 @@ const sortEventsNewestFirst = (events: LoreEvent[]) => [...events].sort((first, 
   return Date.parse(second.datetime) - Date.parse(first.datetime)
 })
 
+const getLocalDatetimeInputValue = (datetime: string | null) => {
+  const timestamp = datetime ? Date.parse(datetime) : NaN
+  if (!Number.isFinite(timestamp)) return ''
+  const offset = new Date(timestamp).getTimezoneOffset() * 60_000
+  return new Date(timestamp - offset).toISOString().slice(0, 16)
+}
+
 const computeInsertionDatetime = (above?: LoreEvent, below?: LoreEvent): string => {
   const aboveMs = above?.datetime ? Date.parse(above.datetime) : NaN
   const belowMs = below?.datetime ? Date.parse(below.datetime) : NaN
@@ -133,6 +140,125 @@ const getChannelNameFromUrl = (channelURL: string) => {
   } catch {
     return ''
   }
+}
+
+type ConnectorPath = { id: string; path: string; color: string }
+
+function ConnectorOverlay({ tracksRef, events, vods, vodsLoading, eventsLoading, dragTarget }: {
+  tracksRef: RefObject<HTMLDivElement | null>
+  events: LoreEvent[]
+  vods: Vod[]
+  vodsLoading: boolean
+  eventsLoading: boolean
+  dragTarget: number | undefined
+}) {
+  const [drawing, setDrawing] = useState({
+    width: 0, height: 0, clipTop: 0, clipBottom: 0,
+    paths: [] as ConnectorPath[],
+  })
+
+  useEffect(() => {
+    const tracks = tracksRef.current
+    const eventScroll = tracks?.querySelector('.allocation-lanes .event-scroll')
+    const vodScroll = tracks?.querySelector('.vod-scroll')
+    if (!tracks || !eventScroll || !vodScroll) return
+
+    const vodCards = new Map([...vodScroll.querySelectorAll<HTMLElement>('[data-connector-vod]')]
+      .map((card) => [card.dataset.connectorVod, card]))
+    const eventsById = new Map(events.map((event) => [event.eventID, event]))
+    const sources = new Map<Element, { id: string; vodCard: HTMLElement; color: string }>()
+    for (const card of eventScroll.querySelectorAll<HTMLElement>('[data-connector-event]')) {
+      const event = eventsById.get(card.dataset.connectorEvent ?? '')
+      if (event?.sourceType !== 'VOD' || !event.vodId) continue
+      const vodCard = vodCards.get(event.vodId)
+      if (vodCard) sources.set(card, { id: event.eventID, vodCard, color: getVodColor(event.vodId) })
+    }
+
+    const nearbyEvents = new Set<Element>()
+    const nearbyVods = new Set<Element>()
+    let frame: number | null = null
+    const updateConnectors = () => {
+      frame = null
+      const tracksRect = tracks.getBoundingClientRect()
+      const eventScrollRect = eventScroll.getBoundingClientRect()
+      const vodRects = new Map<Element, DOMRect>()
+      const paths: ConnectorPath[] = []
+      for (const card of nearbyEvents) {
+        const source = sources.get(card)
+        if (!source || !nearbyVods.has(source.vodCard)) continue
+        const vodRect = vodRects.get(source.vodCard) ?? source.vodCard.getBoundingClientRect()
+        vodRects.set(source.vodCard, vodRect)
+        const eventRect = card.getBoundingClientRect()
+        const startX = vodRect.right - tracksRect.left
+        const startY = vodRect.top + vodRect.height / 2 - tracksRect.top
+        const endX = eventRect.left - tracksRect.left
+        const endY = eventRect.top + eventRect.height / 2 - tracksRect.top
+        const curve = Math.max(28, (endX - startX) * 0.45)
+        paths.push({
+          id: source.id,
+          path: `M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
+          color: source.color,
+        })
+      }
+      setDrawing({
+        width: tracks.clientWidth,
+        height: tracks.clientHeight,
+        clipTop: Math.max(0, eventScrollRect.top - tracksRect.top),
+        clipBottom: Math.max(0, tracksRect.bottom - eventScrollRect.bottom),
+        paths,
+      })
+    }
+    const scheduleUpdate = () => {
+      if (frame === null) frame = window.requestAnimationFrame(updateConnectors)
+    }
+    const observeNearby = (root: Element, nearby: Set<Element>) => new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) nearby.add(entry.target)
+        else nearby.delete(entry.target)
+      }
+      scheduleUpdate()
+    }, { root, rootMargin: '220px 0px' })
+    const eventObserver = observeNearby(eventScroll, nearbyEvents)
+    const vodObserver = observeNearby(vodScroll, nearbyVods)
+    for (const card of sources.keys()) eventObserver.observe(card)
+    new Set([...sources.values()].map((source) => source.vodCard)).forEach((card) => vodObserver.observe(card))
+    const resizeObserver = new ResizeObserver(scheduleUpdate)
+    resizeObserver.observe(tracks)
+    resizeObserver.observe(eventScroll)
+    resizeObserver.observe(vodScroll)
+    const allocationGrid = eventScroll.querySelector('.allocation-grid')
+    if (allocationGrid) resizeObserver.observe(allocationGrid)
+    eventScroll.addEventListener('scroll', scheduleUpdate, { passive: true })
+    vodScroll.addEventListener('scroll', scheduleUpdate, { passive: true })
+    window.addEventListener('resize', scheduleUpdate)
+    scheduleUpdate()
+
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      eventObserver.disconnect()
+      vodObserver.disconnect()
+      resizeObserver.disconnect()
+      eventScroll.removeEventListener('scroll', scheduleUpdate)
+      vodScroll.removeEventListener('scroll', scheduleUpdate)
+      window.removeEventListener('resize', scheduleUpdate)
+    }
+  }, [tracksRef, events, vods, vodsLoading, eventsLoading, dragTarget])
+
+  const { width, height, clipTop, clipBottom, paths } = drawing
+  return (
+    <svg
+      className="connector-overlay"
+      style={{
+        clipPath: `inset(${clipTop}px 0 ${clipBottom}px 0)`,
+        maskImage: `linear-gradient(to bottom, transparent ${clipTop}px, black ${clipTop + 28}px, black calc(100% - ${clipBottom + 28}px), transparent calc(100% - ${clipBottom}px))`,
+      }}
+      aria-hidden="true"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+    >
+      {paths.map(({ id, path, color }) => <path key={id} d={path} stroke={color} />)}
+    </svg>
+  )
 }
 
 function App() {
@@ -172,82 +298,20 @@ function App() {
   >(null)
   const eventDialogRef = useRef<HTMLDialogElement>(null)
   const [descriptionDraft, setDescriptionDraft] = useState('')
+  const [datetimeDraft, setDatetimeDraft] = useState<string | null>(null)
   const resizeStartX = useRef<number | null>(null)
   const allocationGridRef = useRef<HTMLDivElement>(null)
   const tracksRef = useRef<HTMLDivElement>(null)
-  const vodCardRefs = useRef(new Map<string, HTMLElement>())
-  const eventCardRefs = useRef(new Map<string, HTMLElement>())
   const eventRowRefs = useRef(new Map<string, HTMLDivElement>())
   const eventsRef = useRef(events)
   const [dragState, setDragState] = useState<{ eventID: string; originalIndex: number; targetIndex: number } | null>(null)
   const dragStateRef = useRef<{ eventID: string; originalIndex: number; targetIndex: number } | null>(null)
   const dragCleanupRef = useRef<(() => void) | null>(null)
-  const [connectorPaths, setConnectorPaths] = useState<{ path: string; color: string }[]>([])
-  const [connectorSize, setConnectorSize] = useState({ width: 0, height: 0 })
-  const [connectorClipTop, setConnectorClipTop] = useState(0)
-  const [connectorClipBottom, setConnectorClipBottom] = useState(0)
   const channelsLoading = Boolean(projectDirectory) && loadedChannelsDirectory !== projectDirectory && !channelsLoadError
   const vodsLoading = Boolean(projectDirectory) && loadedVodsDirectory !== projectDirectory && !vodsLoadError
   const eventsLoading = Boolean(projectDirectory) && loadedEventsDirectory !== projectDirectory && !eventsLoadError
   const eventWriteInProgress = eventSaving || Boolean(extractingVideoID)
   const eventWritesDisabled = eventWriteInProgress || eventsLoading || Boolean(eventsLoadError) || !projectDirectory
-
-  useLayoutEffect(() => {
-    const tracks = tracksRef.current
-    if (!tracks) return
-
-    let frame: number | null = null
-    const updateConnectors = () => {
-      frame = null
-      const tracksRect = tracks.getBoundingClientRect()
-      setConnectorSize({ width: tracks.clientWidth, height: tracks.clientHeight })
-      const eventScroll = tracks.querySelector('.allocation-lanes .event-scroll')
-      if (eventScroll) {
-        const eventScrollRect = eventScroll.getBoundingClientRect()
-        setConnectorClipTop(Math.max(0, eventScrollRect.top - tracksRect.top))
-        setConnectorClipBottom(Math.max(0, tracksRect.bottom - eventScrollRect.bottom))
-      }
-      const paths = events.flatMap((event) => {
-        if (event.sourceType !== 'VOD' || !event.vodId) return []
-        const vodCard = vodCardRefs.current.get(event.vodId)
-        if (!vodCard) return []
-        const color = getVodColor(event.vodId)
-
-        const vodRect = vodCard.getBoundingClientRect()
-        const startX = vodRect.right - tracksRect.left
-        const startY = vodRect.top + vodRect.height / 2 - tracksRect.top
-        return [...eventCardRefs.current.entries()]
-          .filter(([key]) => key.startsWith(`${event.eventID}:`))
-          .map(([, eventCard]) => {
-            const eventRect = eventCard.getBoundingClientRect()
-            const endX = eventRect.left - tracksRect.left
-            const endY = eventRect.top + eventRect.height / 2 - tracksRect.top
-            const curve = Math.max(28, (endX - startX) * 0.45)
-            return {
-              path: `M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`,
-              color,
-            }
-          })
-      })
-      setConnectorPaths(paths)
-    }
-    const scheduleUpdate = () => {
-      if (frame === null) frame = window.requestAnimationFrame(updateConnectors)
-    }
-    const scrollElements = tracks.querySelectorAll('.track-scroll')
-    scrollElements.forEach((element) => element.addEventListener('scroll', scheduleUpdate, { passive: true }))
-    window.addEventListener('resize', scheduleUpdate)
-    const resizeObserver = new ResizeObserver(scheduleUpdate)
-    resizeObserver.observe(tracks)
-    scheduleUpdate()
-
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame)
-      scrollElements.forEach((element) => element.removeEventListener('scroll', scheduleUpdate))
-      window.removeEventListener('resize', scheduleUpdate)
-      resizeObserver.disconnect()
-    }
-  }, [events, vods, eventsLoading, dragState?.targetIndex])
 
   useEffect(() => {
     eventsRef.current = events
@@ -536,8 +600,13 @@ function App() {
   const openEventDialog = (mode: 'edit' | 'delete', event: LoreEvent) => {
     setEventSaveError('')
     setDescriptionDraft(event.description)
+    setDatetimeDraft(null)
     setEventDialog({ mode, eventID: event.eventID })
   }
+
+  const editedEvent = eventDialog?.mode === 'edit'
+    ? events.find((event) => event.eventID === eventDialog.eventID)
+    : undefined
 
   useLayoutEffect(() => {
     if (eventDialog) eventDialogRef.current?.showModal()
@@ -550,6 +619,16 @@ function App() {
     if ((eventDialog.mode === 'add' || eventDialog.mode === 'edit') && !description) {
       setEventSaveError('Enter an event description.')
       return
+    }
+    let updatedDatetime: string | undefined
+    if (editedEvent?.sourceType === 'manual' && datetimeDraft !== null &&
+      datetimeDraft !== getLocalDatetimeInputValue(editedEvent.datetime)) {
+      const timestamp = Date.parse(datetimeDraft)
+      if (!Number.isFinite(timestamp)) {
+        setEventSaveError('Enter a valid date and time.')
+        return
+      }
+      updatedDatetime = new Date(timestamp).toISOString()
     }
     const updatedEvents = eventDialog.mode === 'add'
       ? sortEventsNewestFirst([
@@ -569,8 +648,12 @@ function App() {
       ])
       : eventDialog.mode === 'delete'
         ? events.filter(({ eventID }) => eventID !== eventDialog.eventID)
-        : events.map((item) => item.eventID === eventDialog.eventID ? { ...item, description } : item)
-    if (await saveEventChanges(updatedEvents)) eventDialogRef.current?.close()
+        : events.map((item) => item.eventID === eventDialog.eventID
+          ? { ...item, description, datetime: updatedDatetime ?? item.datetime }
+          : item)
+    if (await saveEventChanges(updatedDatetime ? sortEventsNewestFirst(updatedEvents) : updatedEvents)) {
+      eventDialogRef.current?.close()
+    }
   }
 
   const startEventDrag = (pointer: PointerEvent<HTMLElement>, event: LoreEvent) => {
@@ -715,11 +798,7 @@ function App() {
     const isDragging = !placeholder && dragState?.eventID === event.eventID
     return (
       <article
-        ref={placeholder ? undefined : (element) => {
-          const cardKey = `${event.eventID}:allocation`
-          if (element) eventCardRefs.current.set(cardKey, element)
-          else eventCardRefs.current.delete(cardKey)
-        }}
+        data-connector-event={placeholder ? undefined : event.eventID}
         aria-hidden={placeholder || undefined}
         className={`event-card allocated-event${placeholder ? ' event-card-placeholder' : ''}${isManual ? ' manual-event' : ''}${isDragging ? ' dragging-preview' : ''}`}
         onPointerDown={placeholder || !isManual ? undefined : (pointer) => startEventDrag(pointer, event)}
@@ -848,18 +927,14 @@ function App() {
       </header>
 
       <div className="tracks" ref={tracksRef}>
-        <svg
-          className="connector-overlay"
-          style={{
-            clipPath: `inset(${connectorClipTop}px 0 ${connectorClipBottom}px 0)`,
-            maskImage: `linear-gradient(to bottom, transparent ${connectorClipTop}px, black ${connectorClipTop + 28}px, black calc(100% - ${connectorClipBottom + 28}px), transparent calc(100% - ${connectorClipBottom}px))`,
-          }}
-          aria-hidden="true"
-          viewBox={`0 0 ${connectorSize.width} ${connectorSize.height}`}
-          preserveAspectRatio="none"
-        >
-          {connectorPaths.map(({ path, color }, index) => <path key={`${path}-${index}`} d={path} stroke={color} />)}
-        </svg>
+        <ConnectorOverlay
+          tracksRef={tracksRef}
+          events={events}
+          vods={vods}
+          vodsLoading={vodsLoading}
+          eventsLoading={eventsLoading}
+          dragTarget={dragState?.targetIndex}
+        />
         <section className="track channels-track" aria-labelledby="channels-heading">
           <div className="track-header">
             <div>
@@ -932,10 +1007,7 @@ function App() {
                   className="vod-card"
                   style={{ borderLeft: `4px solid ${getVodColor(vod.videoID)}` }}
                   key={vod.videoID}
-                  ref={(element) => {
-                    if (element) vodCardRefs.current.set(vod.videoID, element)
-                    else vodCardRefs.current.delete(vod.videoID)
-                  }}
+                  data-connector-vod={vod.videoID}
                 >
                   {vod.thumbnailURL && <img src={vod.thumbnailURL} alt="" loading="lazy" />}
                   <div className="vod-card-details">
@@ -1162,6 +1234,18 @@ function App() {
                     </time>
                   </p>
                 )}
+                {editedEvent?.sourceType === 'manual' && (
+                  <>
+                    <label htmlFor="event-datetime">Date and time</label>
+                    <input
+                      id="event-datetime"
+                      type="datetime-local"
+                      value={datetimeDraft ?? getLocalDatetimeInputValue(editedEvent.datetime)}
+                      disabled={eventSaving}
+                      onChange={(event) => setDatetimeDraft(event.target.value)}
+                    />
+                  </>
+                )}
                 <label htmlFor="event-description">Description</label>
                 <textarea
                   id="event-description"
@@ -1182,7 +1266,7 @@ function App() {
             <div className="settings-actions">
               <button className="clear-button" type="button" onClick={() => eventDialogRef.current?.close()} disabled={eventSaving}>Cancel</button>
               <button className="save-button" type="submit" disabled={eventWritesDisabled}>
-                {eventSaving ? 'Saving...' : eventDialog.mode === 'add' ? 'Add event' : eventDialog.mode === 'edit' ? 'Save description' : 'Delete event'}
+                {eventSaving ? 'Saving...' : eventDialog.mode === 'add' ? 'Add event' : eventDialog.mode === 'edit' ? 'Save changes' : 'Delete event'}
               </button>
             </div>
           </form>

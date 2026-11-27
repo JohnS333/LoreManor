@@ -146,6 +146,8 @@ requests to Express on port `3001`.
   can be dragged and dropped anywhere in the timeline with live predictive
   snapping; releasing the mouse confirms the new position and updates the
   event's datetime to the midpoint of its new neighbors.
+  Use **Edit** on a manual event to set its date and time directly in local time.
+  Saving moves the event to its new chronological position.
 - The Events track contains two side-by-side allocation lanes: **Devlog** on
   the left and **Story** on the right. Events belong to at least one lane;
   events with no Story or Devlog allocation default to Devlog.
@@ -154,6 +156,8 @@ requests to Express on port `3001`.
   Connector lines are clipped to the vertical bounds of the event-card
   scrolling area and fade out over 28 pixels at its top and bottom edges,
   keeping headers and the space below the tracks clear.
+  A connector is measured and drawn only while both cards are within 120 pixels
+  of their respective scroll areas. It reappears as the cards return to range.
 - An event may be allocated to both Story and Devlog and may reference one or
   more video projects through `projectAllocations`.
 - Use **Edit** on an event card to save a new description or **Delete** to

@@ -95,6 +95,8 @@ Exclude:
 
 However, retain otherwise ordinary moments if they establish important context or contribute to a developing storyline.
 
+Any time "the streamer" says something refer to him as JumboSlime
+
 # Output Schema
 
 Return a valid JSON array of event objects using the following exact schema:
